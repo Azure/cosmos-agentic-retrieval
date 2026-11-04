@@ -1,18 +1,27 @@
+# Cosmos DB account and the database that holds the containers to search.
 account_uri: https://YOUR-ACCOUNT.documents.azure.com:443/
 cosmos_database: YOUR-DATABASE
-cosmos_credential: azure_cli
+# How to sign in to Cosmos DB: "default" uses the managed identity in Azure and your az login locally.
+cosmos_credential: default
 
+# OpenAI-compatible chat model. Add llm_api_key if the endpoint needs a key.
 llm_base_url: https://YOUR-ENDPOINT/v1
 llm_model: YOUR-MODEL
+# Extra options sent with each model call, such as {temperature: 0}.
 llm_params: {}
+# Maximum model turns, and maximum documents returned, per question.
 agent_max_turns: 6
 agent_max_documents: 10
 
+# Containers to search, keyed by container name.
 cosmos_containers:
   articles:
     cosmos_schema:
+      # Path to each item's ID.
       item_id_path: /id
+      # The container's partition key paths.
       partition_key_paths: ["/tenant"]
+      # Text fields to search and return. With more than one, set search_text_fields.
       text_paths: ["/text"]
   reports:
     cosmos_schema:

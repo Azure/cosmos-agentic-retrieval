@@ -112,6 +112,7 @@ def test_get_config_reads_yaml_file(monkeypatch, tmp_path):
     settings = get_config()
     assert settings.cosmos_database == "FILEDB"
     assert list(settings.cosmos_containers) == ["C"]
+    assert settings.cosmos_credential == "default"
 
 
 def test_example_yaml_loads_multiple_containers(monkeypatch):
@@ -123,7 +124,7 @@ def test_example_yaml_loads_multiple_containers(monkeypatch):
     assert list(settings.cosmos_containers) == ["articles", "reports"]
     assert str(settings.cosmos_containers["articles"].cosmos_schema.text_paths[0]) == "/text"
     assert str(settings.cosmos_containers["reports"].cosmos_schema.text_paths[0]) == "/content/body"
-    assert settings.cosmos_credential == "azure_cli"
+    assert settings.cosmos_credential == "default"
     assert settings.cosmos_key is None and settings.llm_api_key is None
 
 

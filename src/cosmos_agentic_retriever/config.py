@@ -79,7 +79,7 @@ class RetrieverConfig(BaseSettings):
     cosmos_database: str = Field(min_length=1, max_length=256)
     cosmos_containers: dict[str, ContainerConfig] = Field(min_length=1)
     cosmos_key: SecretStr | None = None
-    cosmos_credential: Literal["azure_cli", "default"] = "azure_cli"
+    cosmos_credential: Literal["azure_cli", "default"] = "default"
     query_engine: QueryEngineConfig = Field(default_factory=QueryEngineConfig)
     host: str = Field(default="127.0.0.1", min_length=1)
     port: int = Field(default=9000, ge=1, le=65535)
