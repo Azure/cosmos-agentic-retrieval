@@ -16,6 +16,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+benchmark = [
+  "huggingface_hub>=0.24,<2",
+]
 dev = [
   "azure-core>=1.30,<2",
   "httpx>=0.27,<1",
