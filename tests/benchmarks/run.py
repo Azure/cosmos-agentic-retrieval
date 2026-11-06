@@ -54,7 +54,6 @@ from cosmos_agentic_retriever.server import create_app
 from dataset_contracts import Question
 from dataset_hipporag2 import HippoRAG2Collection
 from scoring import (
-    compute_answer_containment,
     compute_exact_match,
     compute_f1,
     compute_gold_title_recall,
@@ -64,7 +63,7 @@ from scoring import (
 COLLECTIONS = {"hipporag2": HippoRAG2Collection}
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RUNS_DIR = REPO_ROOT / ".live-data" / "benchmark-runs"
-METRICS = ("exact_match", "f1", "containment", "judge", "gold_title_recall")
+METRICS = ("exact_match", "f1", "judge", "gold_title_recall")
 AGENT_TOKEN_FIELDS = ("prompt_tokens", "completion_tokens", "cached_prompt_tokens", "reasoning_tokens")
 JUDGE_TOKEN_FIELDS = ("prompt_tokens", "completion_tokens")
 MAX_DOCUMENTS = 10
@@ -206,7 +205,6 @@ def answer_and_score_question(
             "scores": {
                 "exact_match": compute_exact_match(prediction, question.answers),
                 "f1": compute_f1(prediction, question.answers),
-                "containment": compute_answer_containment(prediction, question.answers),
                 "judge": judge_score,
                 "gold_title_recall": compute_gold_title_recall(titles, question.gold_titles),
             },
@@ -230,13 +228,15 @@ def compute_percentile(sorted_values: list[float], percent: int) -> float:
 
 
 def summarize_token_counts(counts: list[dict[str, int | None]], names: tuple[str, ...]) -> dict:
-    """Total and per-question mean of each count, over the questions that reported it."""
+    """Total, mean, p50 and p99 per question of each count, over the questions that reported it."""
     summary = {}
     for name in names:
-        known = [c[name] for c in counts if c.get(name) is not None]
+        known = sorted(c[name] for c in counts if c.get(name) is not None)
         summary[name] = {
             "total": sum(known),
             "mean": round(sum(known) / len(known), 1) if known else None,
+            "p50": compute_percentile(known, 50) if known else None,
+            "p99": compute_percentile(known, 99) if known else None,
             "unknown": len(counts) - len(known),
         }
     return summary
@@ -262,7 +262,7 @@ def summarize_records(records: list[dict[str, Any]]) -> dict[str, Any]:
         },
         latency_seconds={
             "mean": round(statistics.fmean(latencies), 2),
-            **{f"p{p}": compute_percentile(latencies, p) for p in (50, 90, 95)},
+            **{f"p{p}": compute_percentile(latencies, p) for p in (50, 90, 95, 99)},
             "max": latencies[-1],
         },
         mean_turns=round(statistics.fmean(r["turns"] or 0 for r in answered), 2),
@@ -298,16 +298,22 @@ def write_run_file(path: Path, metadata: dict[str, Any], records: list[dict[str,
 
 
 def print_summary(path: Path) -> None:
-    """Print each dataset's scores, answered count and median latency."""
+    """Print each dataset's scores, answered count and p50/p99 latency."""
     summary = json.loads(path.read_text())["summary"]
-    print(f"{'dataset':<18}{'answered':>10}" + "".join(f"{m:>18}" for m in METRICS) + f"{'p50 s':>8}")
+    print(
+        f"{'dataset':<18}{'answered':>10}"
+        + "".join(f"{m:>18}" for m in METRICS)
+        + f"{'p50 s':>8}{'p99 s':>8}"
+    )
     for dataset, values in summary.items():
         scores = values.get("scores", {})
-        p50 = values.get("latency_seconds", {}).get("p50")
+        latency = values.get("latency_seconds", {})
         print(
             f"{dataset:<18}{values['answered']:>4}/{values['questions']:<5}"
             + "".join(f"{scores[m]:>18.3f}" if m in scores else f"{'-':>18}" for m in METRICS)
-            + (f"{p50:>8.1f}" if p50 is not None else f"{'-':>8}")
+            + "".join(
+                f"{latency[p]:>8.1f}" if p in latency else f"{'-':>8}" for p in ("p50", "p99")
+            )
         )
     print(f"Results: {path}")
 

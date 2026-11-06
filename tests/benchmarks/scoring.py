@@ -3,8 +3,7 @@
 Answer scores follow the standard SQuAD/HotpotQA definitions: lowercase, drop
 punctuation and the articles a/an/the, then compare words. Each score takes the
 best match over the question's accepted answers. Full-sentence answers score
-low on exact match and F1 even when correct, so containment and a judge model
-are reported as well.
+low on exact match and F1 even when correct, so a judge model scores them too.
 """
 
 import re
@@ -44,14 +43,6 @@ def compute_f1(prediction: str, answers: tuple[str, ...]) -> float:
             precision, recall = overlap / len(predicted), overlap / len(expected)
             best = max(best, 2 * precision * recall / (precision + recall))
     return best
-
-
-def compute_answer_containment(prediction: str, answers: tuple[str, ...]) -> float:
-    """1.0 if any normalized accepted answer appears, word for word, inside the prediction."""
-    predicted = f" {' '.join(normalize_answer(prediction))} "
-    return float(
-        any(f" {' '.join(normalize_answer(a))} " in predicted for a in answers if normalize_answer(a))
-    )
 
 
 def judge_answer_with_model(
