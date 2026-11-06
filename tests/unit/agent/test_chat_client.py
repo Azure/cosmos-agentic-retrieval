@@ -4,9 +4,10 @@ from unittest.mock import Mock
 
 import pytest
 from openai.types.chat import ChatCompletion
+from openai.types.completion_usage import CompletionUsage
 
 from cosmos_agentic_retriever.agent import chat_client
-from cosmos_agentic_retriever.agent.loop import Tool, ToolCall
+from cosmos_agentic_retriever.agent.loop import TokenUsage, Tool, ToolCall
 
 
 @pytest.fixture
@@ -77,6 +78,29 @@ def test_complete_sends_model_options_and_tool_descriptions(client, token_parame
     handler.assert_not_called()
     assert turn.content == "The answer."
     assert turn.tool_calls == [] and turn.error is None
+
+
+def test_complete_returns_token_usage(client):
+    chat, create = client
+    response = _reply()
+    create.return_value = response
+    assert chat.complete([], []).usage == TokenUsage()
+
+    response.usage = CompletionUsage(prompt_tokens=120, completion_tokens=8, total_tokens=128)
+    assert chat.complete([], []).usage == TokenUsage(prompt_tokens=120, completion_tokens=8)
+
+    response.usage = CompletionUsage(
+        prompt_tokens=120,
+        completion_tokens=8,
+        total_tokens=128,
+        prompt_tokens_details={"cached_tokens": 64},
+        completion_tokens_details={"reasoning_tokens": 5},
+    )
+    turn = chat.complete([], [])
+
+    assert turn.usage == TokenUsage(
+        prompt_tokens=120, completion_tokens=8, cached_prompt_tokens=64, reasoning_tokens=5
+    )
 
 
 @pytest.mark.parametrize(
