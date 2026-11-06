@@ -12,6 +12,10 @@
 
 .EXAMPLE
     .\scripts\Add-Retriever-To-Toolkit.ps1 -ResourceGroup my-rg -ContainerAppName my-mcp-toolkit -ConfigFile .\config.deploy.yaml
+
+.PARAMETER PipIndexUrl
+    Package index for the image build, for networks that block PyPI and
+    provide a mirror instead. Defaults to PyPI.
 #>
 
 param(
@@ -25,7 +29,10 @@ param(
     [string]$ConfigFile,
 
     [Parameter(Mandatory=$false)]
-    [string]$ImageTag = "latest"
+    [string]$ImageTag = "latest",
+
+    [Parameter(Mandatory=$false)]
+    [string]$PipIndexUrl = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -44,7 +51,9 @@ $image = "$registry/cosmos-agentic-retriever:$ImageTag"
 
 az acr login --name $registry.Split('.')[0]
 if ($LASTEXITCODE -ne 0) { throw "ACR login failed" }
-docker build --platform linux/amd64 -t $image (Split-Path -Parent $PSScriptRoot)
+$buildArgs = @()
+if ($PipIndexUrl) { $buildArgs = @("--build-arg", "PIP_INDEX_URL=$PipIndexUrl") }
+docker build --platform linux/amd64 @buildArgs -t $image (Split-Path -Parent $PSScriptRoot)
 if ($LASTEXITCODE -ne 0) { throw "Docker build failed" }
 docker push $image
 if ($LASTEXITCODE -ne 0) { throw "Docker push failed" }

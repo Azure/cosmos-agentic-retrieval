@@ -3,6 +3,8 @@ WORKDIR /app
 
 COPY pyproject.toml ./
 COPY src ./src
+# Set with --build-arg on networks that only allow a package mirror; unset uses PyPI.
+ARG PIP_INDEX_URL
 RUN pip install --no-cache-dir .
 
 # Create a non-root user for security
