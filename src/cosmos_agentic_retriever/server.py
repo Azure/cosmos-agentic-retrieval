@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from contextlib import ExitStack, asynccontextmanager
+from dataclasses import asdict
 from typing import Any
 
 import anyio
@@ -352,6 +353,9 @@ def create_app(
             "documents": [item.model_dump(mode="json") for item in documents],
             "terminal_reason": result.terminal_reason,
             "turns": result.turns,
+            "model": client.model,
+            "tool_calls": result.tool_calls,
+            "usage": asdict(result.usage),
             "searched": [target._asdict() for target in searched],
             "errors": [
                 {**target._asdict(), "error": error} for target, error in errors.items()

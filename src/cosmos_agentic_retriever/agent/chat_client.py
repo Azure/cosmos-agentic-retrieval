@@ -15,8 +15,9 @@ from typing import Any
 import structlog
 from openai import OpenAI
 from openai.types.chat import ChatCompletionMessageFunctionToolCall
+from openai.types.completion_usage import CompletionUsage
 
-from cosmos_agentic_retriever.agent.loop import LlmTurn, Tool, ToolCall
+from cosmos_agentic_retriever.agent.loop import LlmTurn, TokenUsage, Tool, ToolCall
 
 _logger = structlog.get_logger(__name__)
 
@@ -49,6 +50,22 @@ def _parse_arguments(raw: str | None) -> dict[str, Any]:
     except json.JSONDecodeError:
         return {}
     return parsed if isinstance(parsed, dict) else {}
+
+
+def _read_usage(usage: CompletionUsage | None) -> TokenUsage:
+    """Copy the reply's token counts; endpoints may omit any of them."""
+    if usage is None:
+        return TokenUsage()
+    prompt_details = usage.prompt_tokens_details
+    completion_details = usage.completion_tokens_details
+    return TokenUsage(
+        prompt_tokens=usage.prompt_tokens,
+        completion_tokens=usage.completion_tokens,
+        cached_prompt_tokens=prompt_details.cached_tokens if prompt_details else None,
+        reasoning_tokens=(
+            completion_details.reasoning_tokens if completion_details else None
+        ),
+    )
 
 
 @dataclass
@@ -120,7 +137,10 @@ class ChatClient:
                     for call in function_calls
                 ]
             return LlmTurn(
-                message=message, content=choice.content, tool_calls=tool_calls
+                message=message,
+                content=choice.content,
+                tool_calls=tool_calls,
+                usage=_read_usage(response.usage),
             )
         except Exception as exc:
             _logger.exception("model_call_failed", model=self.model)

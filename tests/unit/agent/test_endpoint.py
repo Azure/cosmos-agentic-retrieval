@@ -13,7 +13,7 @@ from openai import OpenAI
 
 from cosmos_agentic_retriever.agent import chat_client
 from cosmos_agentic_retriever.agent.chat_client import ChatClient
-from cosmos_agentic_retriever.agent.loop import LlmTurn, ToolCall
+from cosmos_agentic_retriever.agent.loop import LlmTurn, TokenUsage, ToolCall
 from cosmos_agentic_retriever.config import RetrieverConfig
 from cosmos_agentic_retriever.orchestration import (
     ContainerItem,
@@ -30,6 +30,8 @@ from cosmos_agentic_retriever.server import create_app
 
 class _FakeChat:
     """A stand-in chat client returning scripted turns for the loop."""
+
+    model = "fake-model"
 
     def __init__(self, turns: list[LlmTurn]) -> None:
         self._turns = list(turns)
@@ -111,8 +113,17 @@ def _search_then_answer(query="hi", call_id="c1") -> list[LlmTurn]:
             },
             content="",
             tool_calls=[ToolCall(call_id, "full_text_search", {"query": query})],
+            usage=TokenUsage(
+                prompt_tokens=100, completion_tokens=10, cached_prompt_tokens=40, reasoning_tokens=6
+            ),
         ),
-        LlmTurn(message={"role": "assistant", "content": "the answer"}, content="the answer"),
+        LlmTurn(
+            message={"role": "assistant", "content": "the answer"},
+            content="the answer",
+            usage=TokenUsage(
+                prompt_tokens=150, completion_tokens=5, cached_prompt_tokens=0, reasoning_tokens=0
+            ),
+        ),
     ]
 
 
@@ -126,6 +137,14 @@ def test_agent_search_runs_loop_and_returns_answer():
         "documents": [],
         "terminal_reason": "stop",
         "turns": 2,
+        "model": "fake-model",
+        "tool_calls": {"full_text_search": 1},
+        "usage": {
+            "prompt_tokens": 250,
+            "completion_tokens": 15,
+            "cached_prompt_tokens": 40,
+            "reasoning_tokens": 6,
+        },
         "searched": [{"database": "D", "container": "C"}],
         "errors": [],
         "partial": False,

@@ -13,7 +13,7 @@ or max_turns model calls have been made.
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from typing import Any
 
 import structlog
@@ -47,6 +47,25 @@ class ToolCall:
 
 
 @dataclass(frozen=True)
+class TokenUsage:
+    """Token counts the endpoint reported; None for counts it did not report."""
+
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    # Subsets of the two counts above.
+    cached_prompt_tokens: int | None = None
+    reasoning_tokens: int | None = None
+
+    def __add__(self, other: TokenUsage) -> TokenUsage:
+        """Sum each count; a sum is unknown if either side is unknown."""
+        sums: dict[str, int | None] = {}
+        for f in fields(self):
+            mine, theirs = getattr(self, f.name), getattr(other, f.name)
+            sums[f.name] = None if mine is None or theirs is None else mine + theirs
+        return TokenUsage(**sums)
+
+
+@dataclass(frozen=True)
 class LlmTurn:
     """One model reply: its text, any tool calls, and the message to append.
 
@@ -59,6 +78,7 @@ class LlmTurn:
     content: str | None = None
     tool_calls: list[ToolCall] = field(default_factory=list)
     error: str | None = None
+    usage: TokenUsage = field(default_factory=TokenUsage)
 
 
 @dataclass
@@ -74,6 +94,10 @@ class AgentResult:
     terminal_reason: str
     turns: int
     messages: list[dict[str, Any]]
+    # Summed over every model call in the episode.
+    usage: TokenUsage = field(default_factory=TokenUsage)
+    # Calls the model made per tool name, including names of unknown tools.
+    tool_calls: dict[str, int] = field(default_factory=dict)
 
 
 def _run_tool_call(tools_by_name: dict[str, Tool], call: ToolCall) -> str:
@@ -123,9 +147,14 @@ def run_agent_search(
     ]
     terminal_reason = "max_turns"
     turn = 0
+    usage = TokenUsage(
+        prompt_tokens=0, completion_tokens=0, cached_prompt_tokens=0, reasoning_tokens=0
+    )
+    tool_calls: dict[str, int] = {}
     for turn in range(1, max_turns + 1):
         reply = complete(messages, tools)
         messages.append(reply.message)
+        usage += reply.usage
         if reply.error is not None:
             terminal_reason = "error"
             break
@@ -133,6 +162,7 @@ def run_agent_search(
             terminal_reason = "stop"
             break
         for call in reply.tool_calls:
+            tool_calls[call.name] = tool_calls.get(call.name, 0) + 1
             observation = _run_tool_call(tools_by_name, call)
             messages.append(
                 {"role": "tool", "tool_call_id": call.id, "content": observation}
@@ -148,4 +178,6 @@ def run_agent_search(
         terminal_reason=terminal_reason,
         turns=turn,
         messages=messages,
+        usage=usage,
+        tool_calls=tool_calls,
     )

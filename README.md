@@ -105,3 +105,29 @@ python -m cosmos_agentic_retriever serve
 The service listens on `http://127.0.0.1:9000`. A toolkit running on the same
 machine finds it there by default; see the toolkit's
 [local development guide](https://github.com/AzureCosmosDB/MCPToolKit/blob/main/LOCAL_DEVELOPMENT.md).
+
+## Benchmarks
+
+Results on the [HippoRAG 2](https://huggingface.co/datasets/osunlp/HippoRAG_2)
+collection: 1,000 questions each from five question-answering datasets, over one
+shared corpus of 45,881 passages. Run  with `gpt-5.6-luna` as agent and judge,
+full-text search only, at most 6 model turns and 10 documents per question. To
+run it yourself, see [tests/benchmarks](tests/benchmarks/README.md).
+
+| Dataset | Judge accuracy | Gold passage recall | p50 latency | p99 latency |
+|---|---|---|---|---|
+| 2WikiMultihopQA | 0.871 | 0.937 | 6.0 s | 15.8 s |
+| HotpotQA | 0.903 | 0.908 | 4.9 s | 17.9 s |
+| MuSiQue | 0.620 | 0.685 | 10.7 s | 25.2 s |
+| Natural Questions | 0.852 | 0.761 | 5.1 s | 18.3 s |
+| PopQA | 0.815 | 0.514 | 3.7 s | 14.4 s |
+| **All** | **0.812** | **0.761** | **5.6 s** | **21.6 s** |
+
+- **Judge accuracy**: share of answers the judge model accepts as matching a
+  reference answer.
+- **Gold passage recall**: share of each question's supporting passages among the
+  returned documents.
+- Per question, the agent used 3.1 model turns, 2.5 searches and about 10k prompt
+  and 230 completion tokens on average.
+- 7.5% of questions reached the turn limit and returned no answer; this accounts
+  for most misses, especially on MuSiQue.
