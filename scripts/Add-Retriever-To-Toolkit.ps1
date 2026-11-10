@@ -1,3 +1,4 @@
+#Requires -Version 7.0
 <#
 .SYNOPSIS
     Adds the cosmos-agentic-retrieval service to an existing Azure Cosmos DB MCP Toolkit Container App.
@@ -105,9 +106,10 @@ if ($LASTEXITCODE -ne 0) { throw "Docker push failed" }
 
 # Let the app's managed identity call the chat model, unless it already can
 $role = "Cognitive Services OpenAI User"
-$granted = az role assignment list --assignee $principalId --role $role --scope $ModelResourceId --query "length(@)" --output tsv
+# Counted here, not with --query "length(@)": on Windows, az runs through cmd.exe, which rejects the parentheses
+$assignments = az role assignment list --assignee $principalId --role $role --scope $ModelResourceId --output json | ConvertFrom-Json
 if ($LASTEXITCODE -ne 0) { throw "Reading role assignments on '$ModelResourceId' failed" }
-if ($granted -eq "0") {
+if (@($assignments).Count -eq 0) {
     az role assignment create --assignee-object-id $principalId --assignee-principal-type ServicePrincipal `
         --role $role --scope $ModelResourceId --output none
     if ($LASTEXITCODE -ne 0) { throw "Granting '$role' on '$ModelResourceId' failed" }
