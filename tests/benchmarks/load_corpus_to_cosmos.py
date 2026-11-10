@@ -12,7 +12,7 @@ Example:
         --resource-group <rg> --account <cosmos-account> --collection hipporag2 \
         --container hipporag2-full \
         --embedding-base-url https://<foundry>.services.ai.azure.com/openai/v1 \
-        --embedding-deployment text-embedding-3-small
+        --embedding-deployment text-embedding-3-small --embedding-field embedding_te3_small
 """
 
 import argparse
@@ -111,7 +111,11 @@ def main() -> None:
         help="OpenAI-compatible endpoint of the embedding model, e.g. https://<foundry>.services.ai.azure.com/openai/v1; signed in with az login",
     )
     parser.add_argument("--embedding-deployment", required=True, help="embedding model deployment name, e.g. text-embedding-3-small")
-    parser.add_argument("--embedding-field", default="embedding", help="document field that holds the vector (default: %(default)s)")
+    parser.add_argument(
+        "--embedding-field",
+        required=True,
+        help="document field that holds the vector; name it after the model, e.g. embedding_te3_small",
+    )
     parser.add_argument(
         "--workers",
         type=int,

@@ -19,7 +19,7 @@ python tests/benchmarks/load_corpus_to_cosmos.py --subscription <id> \
     --resource-group <rg> --account <account> --collection hipporag2 \
     --container hipporag2-full \
     --embedding-base-url https://<foundry>.services.ai.azure.com/openai/v1 \
-    --embedding-deployment text-embedding-3-small
+    --embedding-deployment text-embedding-3-small --embedding-field embedding_te3_small
 ```
 
 ## Run
