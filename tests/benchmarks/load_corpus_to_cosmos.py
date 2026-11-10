@@ -3,8 +3,9 @@
 Creates the database and container if they are missing (through the Azure CLI),
 with full-text indexes on the title and text and a vector index on the embedding
 field, so every MCP toolkit search tool works on it. Then embeds the passages not
-yet in the container with the given embedding deployment and writes them. With
---force, every passage is embedded and rewritten.
+yet in the container with the given embedding deployment and writes them. A failed
+batch is reported and the load continues; rerunning skips the passages already
+loaded. With --force, every passage is embedded and rewritten.
 
 Example:
     python tests/benchmarks/load_corpus_to_cosmos.py --subscription <id> \
@@ -17,6 +18,7 @@ Example:
 import argparse
 import json
 import subprocess
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 
 from azure.cosmos import CosmosClient
@@ -142,29 +144,42 @@ def main() -> None:
         passages = [p for p in passages if p.id not in existing_ids]
     print(f"Writing {len(passages)} passages")
 
-    def embed_and_write_passages(batch: list[Passage]) -> int:
-        for passage, embedding in zip(batch, embed_passages(batch), strict=True):
-            container.upsert_item(
-                {
-                    "id": passage.id,
-                    "title": passage.title,
-                    "text": passage.text,
-                    "datasets": list(passage.datasets),
-                    args.embedding_field: embedding,
-                }
-            )
-        return len(batch)
+    def embed_and_write_passages(batch: list[Passage]) -> str | None:
+        """Embed and write one batch; return the error instead of raising, so other batches continue."""
+        try:
+            for passage, embedding in zip(batch, embed_passages(batch), strict=True):
+                container.upsert_item(
+                    {
+                        "id": passage.id,
+                        "title": passage.title,
+                        "text": passage.text,
+                        "datasets": list(passage.datasets),
+                        args.embedding_field: embedding,
+                    }
+                )
+        except Exception as exc:
+            return f"{type(exc).__name__}: {exc}"[:200]
+        return None
 
     batches = [
         passages[start : start + PASSAGES_PER_EMBEDDING_REQUEST]
         for start in range(0, len(passages), PASSAGES_PER_EMBEDDING_REQUEST)
     ]
+    errors: Counter[str] = Counter()
     with ThreadPoolExecutor(max_workers=4) as pool, tqdm(total=len(passages), desc="Writing passages") as progress:
-        for written in pool.map(embed_and_write_passages, batches):
-            progress.update(written)
+        for batch, error in zip(batches, pool.map(embed_and_write_passages, batches)):
+            progress.update(len(batch))
+            if error:
+                errors[error] += 1
+                progress.set_postfix(failed_batches=errors.total())
 
     count = next(iter(container.query_items("SELECT VALUE COUNT(1) FROM c", enable_cross_partition_query=True)))
     print(f"{args.database}/{args.container} now holds {count} items")
+    if errors:
+        print(f"{errors.total()} batches failed; rerun the same command to load their passages. Errors:")
+        for error, batch_count in errors.most_common():
+            print(f"  {batch_count} x {error}")
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":
