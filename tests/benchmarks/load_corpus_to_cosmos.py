@@ -99,15 +99,25 @@ def create_container_if_missing(args, dimensions: int) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--subscription", required=True)
-    parser.add_argument("--resource-group", required=True)
-    parser.add_argument("--account", required=True)
-    parser.add_argument("--database", default="mcp-bench-v1")
-    parser.add_argument("--collection", choices=sorted(COLLECTIONS), required=True)
-    parser.add_argument("--container", required=True, help="container to load into")
-    parser.add_argument("--embedding-base-url", required=True, help="OpenAI-compatible endpoint, signed in with az login")
-    parser.add_argument("--embedding-deployment", required=True)
-    parser.add_argument("--embedding-field", default="embedding", help="document field that holds the vector")
+    parser.add_argument("--subscription", required=True, help="Azure subscription ID of the Cosmos DB account")
+    parser.add_argument("--resource-group", required=True, help="resource group of the Cosmos DB account")
+    parser.add_argument("--account", required=True, help="Cosmos DB account name")
+    parser.add_argument("--database", default="mcp-bench-v1", help="database to load into, created if missing (default: %(default)s)")
+    parser.add_argument("--collection", choices=sorted(COLLECTIONS), required=True, help="benchmark collection whose corpus to load")
+    parser.add_argument("--container", required=True, help="container to load into, created if missing")
+    parser.add_argument(
+        "--embedding-base-url",
+        required=True,
+        help="OpenAI-compatible endpoint of the embedding model, e.g. https://<foundry>.services.ai.azure.com/openai/v1; signed in with az login",
+    )
+    parser.add_argument("--embedding-deployment", required=True, help="embedding model deployment name, e.g. text-embedding-3-small")
+    parser.add_argument("--embedding-field", default="embedding", help="document field that holds the vector (default: %(default)s)")
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=2,
+        help=f"number of threads working in parallel; each embeds and writes {PASSAGES_PER_EMBEDDING_REQUEST} passages at a time (default: %(default)s)",
+    )
     parser.add_argument("--force", action="store_true", help="rewrite passages that already exist")
     args = parser.parse_args()
 
@@ -169,7 +179,7 @@ def main() -> None:
     ]
     errors: Counter[str] = Counter()
     failed = 0
-    with ThreadPoolExecutor(max_workers=4) as pool, tqdm(total=len(passages), desc="Writing passages") as progress:
+    with ThreadPoolExecutor(max_workers=args.workers) as pool, tqdm(total=len(passages), desc="Writing passages") as progress:
         for batch, error in zip(batches, pool.map(embed_and_write_passages, batches)):
             progress.update(len(batch))
             if error:

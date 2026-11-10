@@ -331,17 +331,17 @@ def read_git_commit() -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--collection", choices=sorted(COLLECTIONS))
+    parser.add_argument("--collection", choices=sorted(COLLECTIONS), help="benchmark collection whose questions to run")
     parser.add_argument("--container", help="Cosmos container holding the collection's corpus")
-    parser.add_argument("--account-uri", help="Cosmos account for an in-process run")
-    parser.add_argument("--database", help=f"default {DEFAULTS['database']}")
-    parser.add_argument("--questions-per-dataset", type=int)
-    parser.add_argument("--seed", type=int, help=f"default {DEFAULTS['seed']}")
-    parser.add_argument("--toolkit-url", help="a deployed toolkit's /mcp URL, instead of in-process")
-    parser.add_argument("--toolkit-app-id", help="the toolkit's Entra app client ID")
-    parser.add_argument("--resume-file", type=Path, help="an earlier run to complete")
-    parser.add_argument("--output-file", type=Path)
-    parser.add_argument("--workers", type=int, default=4)
+    parser.add_argument("--account-uri", help="Cosmos DB account URI, to run the service in this process")
+    parser.add_argument("--database", help=f"database holding the container (default: {DEFAULTS['database']})")
+    parser.add_argument("--questions-per-dataset", type=int, help="questions sampled from each dataset (default: all)")
+    parser.add_argument("--seed", type=int, help=f"random seed for sampling questions (default: {DEFAULTS['seed']})")
+    parser.add_argument("--toolkit-url", help="a deployed MCP toolkit's /mcp URL, to run through the toolkit instead")
+    parser.add_argument("--toolkit-app-id", help="client ID of the toolkit's Entra app, used to sign in to the toolkit")
+    parser.add_argument("--resume-file", type=Path, help="an earlier run's file; reruns only its failed or missing questions")
+    parser.add_argument("--output-file", type=Path, help="where to write this run (default: .live-data/benchmark-runs/<collection>-<time>.json)")
+    parser.add_argument("--workers", type=int, default=4, help="number of questions run in parallel (default: %(default)s)")
     args = parser.parse_args()
 
     if args.resume_file:
