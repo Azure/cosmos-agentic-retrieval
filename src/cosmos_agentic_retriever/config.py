@@ -86,6 +86,7 @@ class RetrieverConfig(BaseSettings):
     log_level: Literal["debug", "info", "warning", "error", "critical"] = "info"
     llm_base_url: AnyHttpUrl
     llm_model: str = Field(min_length=1)
+    # Without a key, the model is called with an Entra token from DefaultAzureCredential.
     llm_api_key: SecretStr | None = None
     llm_params: dict[str, Any] = Field(default_factory=dict)
     agent_max_turns: int = Field(default=6, ge=1, le=50)

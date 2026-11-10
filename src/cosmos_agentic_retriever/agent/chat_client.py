@@ -9,6 +9,7 @@ return an error so the loop can stop.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -72,14 +73,15 @@ def _read_usage(usage: CompletionUsage | None) -> TokenUsage:
 class ChatClient:
     """Send messages to the configured OpenAI-compatible chat endpoint.
 
-    base_url is the API address; model is the model or deployment name. params
-    adds request options such as max_completion_tokens and temperature. The
-    client supplies model, messages, and tools even if params contains those keys.
+    base_url is the API address; model is the model or deployment name. api_key is
+    a key, or a function returning a fresh Entra token. params adds request options
+    such as max_completion_tokens and temperature. The client supplies model,
+    messages, and tools even if params contains those keys.
     """
 
     base_url: str
     model: str
-    api_key: str = "unused"
+    api_key: str | Callable[[], str] = "unused"
     params: dict[str, Any] = field(default_factory=dict)
     timeout: float = 60.0
 

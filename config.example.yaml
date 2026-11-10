@@ -4,7 +4,7 @@ cosmos_database: YOUR-DATABASE
 # How to sign in to Cosmos DB: "default" uses the managed identity in Azure and your az login locally.
 cosmos_credential: default
 
-# OpenAI-compatible chat model. Add llm_api_key if the endpoint needs a key.
+# OpenAI-compatible chat model.
 llm_base_url: https://YOUR-ENDPOINT/v1
 llm_model: YOUR-MODEL
 # Extra options sent with each model call, such as {temperature: 0}.

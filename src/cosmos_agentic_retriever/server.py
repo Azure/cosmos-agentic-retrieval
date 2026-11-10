@@ -18,7 +18,7 @@ event loop.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import ExitStack, asynccontextmanager
 from dataclasses import asdict
 from typing import Any
@@ -26,7 +26,7 @@ from typing import Any
 import anyio
 import structlog
 from azure.cosmos import CosmosClient
-from azure.identity import AzureCliCredential, DefaultAzureCredential
+from azure.identity import AzureCliCredential, DefaultAzureCredential, get_bearer_token_provider
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -56,6 +56,9 @@ from cosmos_agentic_retriever.query_engine.types import (
 from cosmos_agentic_retriever.query_engine.types import (
     SearchRequest as QuerySearchRequest,
 )
+
+# Entra token audience for Azure OpenAI and Azure AI Foundry model endpoints.
+LLM_TOKEN_SCOPE = "https://cognitiveservices.azure.com/.default"
 
 
 class SearchRequest(BaseModel):
@@ -163,14 +166,17 @@ def create_app(
                 },
                 max_workers=resolved.query_engine.max_concurrency,
             )
+            llm_auth: str | Callable[[], str]
+            if resolved.llm_api_key is not None:
+                llm_auth = resolved.llm_api_key.get_secret_value()
+            else:
+                identity = DefaultAzureCredential()
+                resources.callback(identity.close)
+                llm_auth = get_bearer_token_provider(identity, LLM_TOKEN_SCOPE)
             app.state.chat_client = ChatClient(
                 base_url=str(resolved.llm_base_url),
                 model=resolved.llm_model,
-                api_key=(
-                    resolved.llm_api_key.get_secret_value()
-                    if resolved.llm_api_key is not None
-                    else "unused"
-                ),
+                api_key=llm_auth,
                 params=dict(resolved.llm_params),
             )
             yield

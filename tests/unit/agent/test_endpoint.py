@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import json
+import time
 from unittest.mock import Mock
 
 import httpx
 import pytest
+from azure.core.credentials import AccessToken
 from azure.cosmos import ContainerProxy
 from fastapi.testclient import TestClient
 from openai import OpenAI
 
+from cosmos_agentic_retriever import server
 from cosmos_agentic_retriever.agent import chat_client
 from cosmos_agentic_retriever.agent.chat_client import ChatClient
 from cosmos_agentic_retriever.agent.loop import LlmTurn, TokenUsage, ToolCall
@@ -62,6 +65,8 @@ def _document(retrieval_id: str, rank: int, text: str = "") -> ContainerItem:
 
 
 def _settings(**options) -> RetrieverConfig:
+    # A fake key keeps tests from signing in to Azure; pass llm_api_key=None to test Entra.
+    options.setdefault("llm_api_key", "test-key")
     return RetrieverConfig(
         account_uri="https://example.documents.azure.com",
         cosmos_database="D",
@@ -174,6 +179,37 @@ def test_agent_search_blank_query_rejected():
 def test_configured_llm_builds_chat_client():
     with TestClient(_app(_settings())) as http:
         assert isinstance(http.app.state.chat_client, ChatClient)
+
+
+class _FakeIdentity:
+    """A stand-in Azure credential that issues a fixed token."""
+
+    def __init__(self) -> None:
+        self.scopes: tuple[str, ...] = ()
+        self.closed = False
+
+    def get_token(self, *scopes, **options) -> AccessToken:
+        self.scopes = scopes
+        return AccessToken("entra-token", int(time.time()) + 3600)
+
+    def close(self) -> None:
+        self.closed = True
+
+
+@pytest.mark.parametrize("api_key", ["model-key", None])
+def test_chat_client_signs_in_with_key_or_entra(monkeypatch, api_key):
+    identity = _FakeIdentity()
+    monkeypatch.setattr(server, "DefaultAzureCredential", lambda: identity)
+
+    with TestClient(_app(_settings(llm_api_key=api_key))) as http:
+        client_key = http.app.state.chat_client.api_key
+        if api_key is None:
+            assert client_key() == "entra-token"
+            assert identity.scopes == (server.LLM_TOKEN_SCOPE,)
+        else:
+            assert client_key == api_key
+
+    assert identity.closed is (api_key is None)
 
 
 @pytest.mark.parametrize("container", [None, "C"])

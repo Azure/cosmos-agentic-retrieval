@@ -13,7 +13,7 @@ Toolkit. This feature is currently in preview.
    Apps.
 2. Cosmos DB containers whose searched fields have a
    [full-text policy and index](https://learn.microsoft.com/azure/cosmos-db/gen-ai/full-text-search).
-3. An OpenAI-compatible chat model endpoint reachable from Azure.
+3. A chat model deployment in Azure OpenAI or Azure AI Foundry.
 4. Tools: the same as the toolkit's deployment (Azure CLI, PowerShell 7+,
    Docker Desktop installed and running).
 
@@ -38,9 +38,8 @@ The following are required:
 ```yaml
 account_uri: https://YOUR-ACCOUNT.documents.azure.com:443/
 cosmos_database: YOUR-DATABASE
-llm_base_url: https://YOUR-ENDPOINT/v1
+llm_base_url: https://YOUR-ENDPOINT/openai/v1
 llm_model: YOUR-MODEL
-llm_api_key: YOUR-KEY            # only if the endpoint needs a key
 cosmos_containers:
   YOUR-CONTAINER:
     cosmos_schema:
@@ -49,18 +48,25 @@ cosmos_containers:
       text_paths: ["/YOUR-TEXT-FIELD"]
 ```
 
+The service signs in to Cosmos DB and the model with the app's managed identity.
+It is built into the service's image; the script refuses a file with
+`cosmos_key` or `llm_api_key`.
+
 ### Step 3: Add the service to the toolkit app
 
-Use the resource group and Container App name of an existing Azure MCP Tool Kit App:
+Use the resource group and Container App name of an existing Azure MCP Tool Kit
+app, and the resource ID of the Azure OpenAI or Azure AI Foundry resource that
+hosts the model:
 
 ```powershell
 .\scripts\Add-Retriever-To-Toolkit.ps1 -ResourceGroup <rg> -ContainerAppName <app> `
-  -ConfigFile .\config.deploy.yaml
+  -ConfigFile .\config.deploy.yaml -ModelResourceId <model-resource-id>
 ```
 
-The script builds the service image, pushes it to the toolkit's registry,
-stores the configuration as a Container App secret, and adds the service as a
-second container in the app. 
+The script builds the service image with the configuration inside, pushes it to
+the toolkit's registry, lets the app's managed identity call the model, and adds
+the service as a second container in the app. On networks that block PyPI, add
+`-PipIndexUrl <mirror>` to install packages from a mirror.
 
 ### Step 4: Try it
 
@@ -71,14 +77,8 @@ and ask a question that uses `agentic_search`.
 
 ## Updating the configuration
 
-To change the configuration, update the secret and restart the app:
-
-```powershell
-az containerapp secret set --name <app> --resource-group <rg> `
-  --secrets "retriever-config=@config.deploy.yaml"
-az containerapp revision restart --name <app> --resource-group <rg> `
-  --revision (az containerapp show --name <app> --resource-group <rg> --query properties.latestRevisionName -o tsv)
-```
+To change the configuration, edit `config.deploy.yaml` and run the script from
+Step 3 again. It builds a new image and replaces the service's container.
 
 ## Limitations
 
