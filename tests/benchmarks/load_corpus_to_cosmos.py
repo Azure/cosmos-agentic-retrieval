@@ -137,12 +137,14 @@ def main() -> None:
     )
     container = client.get_database_client(args.database).get_container_client(args.container)
 
+    corpus_size = len(passages)
     if not args.force:
         existing_ids = set(
             container.query_items("SELECT VALUE c.id FROM c", enable_cross_partition_query=True)
         )
         passages = [p for p in passages if p.id not in existing_ids]
-    print(f"Writing {len(passages)} passages")
+    skipped = corpus_size - len(passages)
+    print(f"Writing {len(passages)} passages; skipping {skipped} already in the container")
 
     def embed_and_write_passages(batch: list[Passage]) -> str | None:
         """Embed and write one batch; return the error instead of raising, so other batches continue."""
@@ -166,17 +168,24 @@ def main() -> None:
         for start in range(0, len(passages), PASSAGES_PER_EMBEDDING_REQUEST)
     ]
     errors: Counter[str] = Counter()
+    failed = 0
     with ThreadPoolExecutor(max_workers=4) as pool, tqdm(total=len(passages), desc="Writing passages") as progress:
         for batch, error in zip(batches, pool.map(embed_and_write_passages, batches)):
             progress.update(len(batch))
             if error:
                 errors[error] += 1
+                failed += len(batch)
                 progress.set_postfix(failed_batches=errors.total())
 
     count = next(iter(container.query_items("SELECT VALUE COUNT(1) FROM c", enable_cross_partition_query=True)))
-    print(f"{args.database}/{args.container} now holds {count} items")
+    # Some passages of a failed batch may have been written before the error.
+    print(
+        f"Loaded {len(passages) - failed}, skipped {skipped} already in the container, "
+        f"failed {failed} ({errors.total()} batches); "
+        f"{args.database}/{args.container} now holds {count} items"
+    )
     if errors:
-        print(f"{errors.total()} batches failed; rerun the same command to load their passages. Errors:")
+        print("Rerun the same command to load the failed passages. Errors:")
         for error, batch_count in errors.most_common():
             print(f"  {batch_count} x {error}")
         raise SystemExit(1)
