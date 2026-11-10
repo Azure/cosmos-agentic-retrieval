@@ -13,9 +13,9 @@ missing questions of an earlier run, with that run's settings, into a new file.
 
 Examples:
     python tests/benchmarks/run.py --account-uri https://<account>.documents.azure.com:443/ \
-        --collection hipporag2 --questions-per-dataset 100
+        --collection hipporag2 --container hipporag2-full --questions-per-dataset 100
     python tests/benchmarks/run.py --toolkit-url https://<app>.azurecontainerapps.io/mcp \
-        --toolkit-app-id <entra-app-client-id> --collection hipporag2
+        --toolkit-app-id <entra-app-client-id> --collection hipporag2 --container hipporag2-full
     python tests/benchmarks/run.py --resume-file .live-data/benchmark-runs/<run>.json
 
 Without --questions-per-dataset, every question is run.
@@ -70,6 +70,7 @@ MAX_DOCUMENTS = 10
 # Settings that decide which questions run and where; a resumed run reuses them.
 RUN_SETTINGS = (
     "collection",
+    "container",
     "account_uri",
     "database",
     "questions_per_dataset",
@@ -105,7 +106,7 @@ def start_in_process_search(stack: ExitStack, settings: dict[str, Any]) -> Searc
         cosmos_database=settings["database"],
         cosmos_credential="azure_cli",
         cosmos_containers={
-            settings["collection"]: {
+            settings["container"]: {
                 "cosmos_schema": {
                     "item_id_path": "/id",
                     "partition_key_paths": ["/id"],
@@ -152,7 +153,7 @@ def start_toolkit_search(settings: dict[str, Any]) -> SearchFn:
             "query": query,
             "maxDocuments": MAX_DOCUMENTS,
             "database": settings["database"],
-            "container": settings["collection"],
+            "container": settings["container"],
         }
         async with (
             httpx.AsyncClient(
@@ -331,6 +332,7 @@ def read_git_commit() -> str:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--collection", choices=sorted(COLLECTIONS))
+    parser.add_argument("--container", help="Cosmos container holding the collection's corpus")
     parser.add_argument("--account-uri", help="Cosmos account for an in-process run")
     parser.add_argument("--database", help=f"default {DEFAULTS['database']}")
     parser.add_argument("--questions-per-dataset", type=int)
@@ -357,6 +359,8 @@ def main() -> None:
                 settings[name] = value
         if settings["collection"] is None:
             parser.error("--collection is required")
+        if settings["container"] is None:
+            parser.error("--container is required")
         if (settings["account_uri"] is None) == (settings["toolkit_url"] is None):
             parser.error("give either --account-uri or --toolkit-url")
         if settings["toolkit_url"] and not settings["toolkit_app_id"]:

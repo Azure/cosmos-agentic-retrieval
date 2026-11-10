@@ -1,12 +1,17 @@
-"""Load a benchmark collection's corpus into a Cosmos DB container.
+"""Load a benchmark collection's corpus into a Cosmos DB container, with embeddings.
 
 Creates the database and container if they are missing (through the Azure CLI),
-then writes the passages not yet in the container. With --force, every passage
-is rewritten.
+with full-text indexes on the title and text and a vector index on the embedding
+field, so every MCP toolkit search tool works on it. Then embeds the passages not
+yet in the container with the given embedding deployment and writes them. With
+--force, every passage is embedded and rewritten.
 
 Example:
     python tests/benchmarks/load_corpus_to_cosmos.py --subscription <id> \
-        --resource-group <rg> --account <cosmos-account> --collection hipporag2
+        --resource-group <rg> --account <cosmos-account> --collection hipporag2 \
+        --container hipporag2-full \
+        --embedding-base-url https://<foundry>.services.ai.azure.com/openai/v1 \
+        --embedding-deployment text-embedding-3-small
 """
 
 import argparse
@@ -15,13 +20,18 @@ import subprocess
 from concurrent.futures import ThreadPoolExecutor
 
 from azure.cosmos import CosmosClient
-from azure.identity import AzureCliCredential
+from azure.identity import AzureCliCredential, get_bearer_token_provider
+from openai import OpenAI
 from tqdm import tqdm
 
+from dataset_contracts import Passage
 from dataset_hipporag2 import HippoRAG2Collection
 
 COLLECTIONS = {"hipporag2": HippoRAG2Collection}
 TEXT_PATHS = ("/title", "/text")
+# Entra token audience for Azure OpenAI and Azure AI Foundry endpoints.
+TOKEN_SCOPE = "https://cognitiveservices.azure.com/.default"
+PASSAGES_PER_EMBEDDING_REQUEST = 100
 
 
 def run_az_command(arguments: list[str]):
@@ -35,8 +45,8 @@ def run_az_command(arguments: list[str]):
     return json.loads(result.stdout) if result.stdout.strip() else None
 
 
-def create_container_if_missing(args, container_name: str) -> str:
-    """Create the database and full-text-indexed container if needed; return the account endpoint."""
+def create_container_if_missing(args, dimensions: int) -> str:
+    """Create the database and the full-text and vector indexed container if needed; return the account endpoint."""
     scope = ["--subscription", args.subscription, "--resource-group", args.resource_group]
     account = run_az_command(["cosmosdb", "show", *scope, "--name", args.account])
     scope += ["--account-name", args.account]
@@ -46,25 +56,39 @@ def create_container_if_missing(args, container_name: str) -> str:
     containers = run_az_command(
         ["cosmosdb", "sql", "container", "list", *scope, "--database-name", args.database]
     )
-    if container_name not in {c["name"] for c in containers}:
+    if args.container not in {c["name"] for c in containers}:
+        vector_path = f"/{args.embedding_field}"
         full_text_policy = {
             "defaultLanguage": "en-US",
             "fullTextPaths": [{"path": p, "language": "en-US"} for p in TEXT_PATHS],
+        }
+        vector_policy = {
+            "vectorEmbeddings": [
+                {
+                    "path": vector_path,
+                    "dataType": "float32",
+                    "dimensions": dimensions,
+                    "distanceFunction": "cosine",
+                }
+            ]
         }
         indexing_policy = {
             "indexingMode": "consistent",
             "automatic": True,
             "includedPaths": [{"path": "/*"}],
-            "excludedPaths": [{"path": '/"_etag"/?'}],
+            # The vector is searched through its vector index only.
+            "excludedPaths": [{"path": '/"_etag"/?'}, {"path": f"{vector_path}/*"}],
             "fullTextIndexes": [{"path": p} for p in TEXT_PATHS],
+            "vectorIndexes": [{"path": vector_path, "type": "diskANN"}],
         }
         run_az_command(
             [
                 "cosmosdb", "sql", "container", "create", *scope,
                 "--database-name", args.database,
-                "--name", container_name,
+                "--name", args.container,
                 "--partition-key-path", "/id",
                 "--full-text-policy", json.dumps(full_text_policy),
+                "--vector-embeddings", json.dumps(vector_policy),
                 "--idx", json.dumps(indexing_policy),
             ]
         )
@@ -78,6 +102,10 @@ def main() -> None:
     parser.add_argument("--account", required=True)
     parser.add_argument("--database", default="mcp-bench-v1")
     parser.add_argument("--collection", choices=sorted(COLLECTIONS), required=True)
+    parser.add_argument("--container", required=True, help="container to load into")
+    parser.add_argument("--embedding-base-url", required=True, help="OpenAI-compatible endpoint, signed in with az login")
+    parser.add_argument("--embedding-deployment", required=True)
+    parser.add_argument("--embedding-field", default="embedding", help="document field that holds the vector")
     parser.add_argument("--force", action="store_true", help="rewrite passages that already exist")
     args = parser.parse_args()
 
@@ -85,12 +113,27 @@ def main() -> None:
     passages = collection.read_merged_corpus_passages()
     print(f"{collection.name}: {len(passages)} passages")
 
-    endpoint = create_container_if_missing(args, collection.name)
+    embedder = OpenAI(
+        base_url=args.embedding_base_url,
+        api_key=get_bearer_token_provider(AzureCliCredential(), TOKEN_SCOPE),
+        # The embedding deployment's tokens-per-minute limit paces the load.
+        max_retries=20,
+    )
+
+    def embed_passages(batch: list[Passage]) -> list[list[float]]:
+        response = embedder.embeddings.create(
+            model=args.embedding_deployment, input=[f"{p.title}\n{p.text}" for p in batch]
+        )
+        return [item.embedding for item in sorted(response.data, key=lambda item: item.index)]
+
+    dimensions = len(embed_passages(passages[:1])[0])
+    print(f"{args.embedding_deployment}: {dimensions} dimensions in /{args.embedding_field}")
+    endpoint = create_container_if_missing(args, dimensions)
     # Serverless accounts throttle bursts (HTTP 429); allow long retries instead of failing.
     client = CosmosClient(
         endpoint, credential=AzureCliCredential(), retry_total=30, retry_backoff_max=120
     )
-    container = client.get_database_client(args.database).get_container_client(collection.name)
+    container = client.get_database_client(args.database).get_container_client(args.container)
 
     if not args.force:
         existing_ids = set(
@@ -99,16 +142,29 @@ def main() -> None:
         passages = [p for p in passages if p.id not in existing_ids]
     print(f"Writing {len(passages)} passages")
 
-    def write_passage(passage) -> None:
-        container.upsert_item(
-            {"id": passage.id, "title": passage.title, "text": passage.text, "datasets": list(passage.datasets)}
-        )
+    def embed_and_write_passages(batch: list[Passage]) -> int:
+        for passage, embedding in zip(batch, embed_passages(batch), strict=True):
+            container.upsert_item(
+                {
+                    "id": passage.id,
+                    "title": passage.title,
+                    "text": passage.text,
+                    "datasets": list(passage.datasets),
+                    args.embedding_field: embedding,
+                }
+            )
+        return len(batch)
 
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        list(tqdm(pool.map(write_passage, passages), total=len(passages), desc="Writing passages"))
+    batches = [
+        passages[start : start + PASSAGES_PER_EMBEDDING_REQUEST]
+        for start in range(0, len(passages), PASSAGES_PER_EMBEDDING_REQUEST)
+    ]
+    with ThreadPoolExecutor(max_workers=4) as pool, tqdm(total=len(passages), desc="Writing passages") as progress:
+        for written in pool.map(embed_and_write_passages, batches):
+            progress.update(written)
 
     count = next(iter(container.query_items("SELECT VALUE COUNT(1) FROM c", enable_cross_partition_query=True)))
-    print(f"{args.database}/{collection.name} now holds {count} items")
+    print(f"{args.database}/{args.container} now holds {count} items")
 
 
 if __name__ == "__main__":

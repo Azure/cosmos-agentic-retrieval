@@ -8,13 +8,18 @@ PopQA, over one shared corpus of 45,881 passages.
 ## Setup
 
 Install the benchmark extras and sign in with `az login`. Then load the corpus
-into a Cosmos DB account with full-text search enabled. This creates the database
-and container if needed and skips passages already loaded:
+into a Cosmos DB account with full-text and vector search enabled. This creates
+the database and container if needed, with full-text indexes on the title and
+text and a vector index on the embedding, then embeds and writes the passages
+not yet loaded. Your `az login` needs access to call the embedding deployment:
 
 ```bash
 python -m pip install -e '.[benchmark]'
 python tests/benchmarks/load_corpus_to_cosmos.py --subscription <id> \
-    --resource-group <rg> --account <account> --collection hipporag2
+    --resource-group <rg> --account <account> --collection hipporag2 \
+    --container hipporag2-full \
+    --embedding-base-url https://<foundry>.services.ai.azure.com/openai/v1 \
+    --embedding-deployment text-embedding-3-small
 ```
 
 ## Run
@@ -38,7 +43,7 @@ for both the agent and the judge, and Cosmos DB is reached with your `az login`:
 
 ```bash
 python tests/benchmarks/run.py --account-uri https://<account>.documents.azure.com:443/ \
-    --collection hipporag2 --questions-per-dataset 100 --workers 8
+    --collection hipporag2 --container hipporag2-full --questions-per-dataset 100 --workers 8
 ```
 
 **Through a deployed toolkit**. `run.py` calls the toolkit's `agentic_search` MCP
@@ -50,7 +55,7 @@ configured to search the corpus container:
 ```bash
 python tests/benchmarks/run.py --toolkit-url https://<toolkit-app>/mcp \
     --toolkit-app-id <toolkit-entra-app-client-id> \
-    --collection hipporag2 --questions-per-dataset 100 --workers 8
+    --collection hipporag2 --container hipporag2-full --questions-per-dataset 100 --workers 8
 ```
 
 Without `--questions-per-dataset`, all 5,000 questions run.
