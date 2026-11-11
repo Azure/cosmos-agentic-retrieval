@@ -58,6 +58,8 @@ def _settings(**options):
             "cosmos_database": "D",
             "llm_base_url": "https://model.example.com/v1",
             "llm_model": "test-model",
+            # A model key keeps the model from creating its own Azure credential here.
+            "llm_api_key": "test-key",
             "cosmos_containers": {
                 "C": {
                     "cosmos_schema": {
@@ -158,7 +160,7 @@ def test_lifespan_builds_once_and_closes_owned_resources(monkeypatch, authentica
 )
 def test_startup_failure_closes_created_resources(monkeypatch, stage):
     credential, client = Mock(), Mock()
-    monkeypatch.setattr(server, "AzureCliCredential", Mock(return_value=credential))
+    monkeypatch.setattr(server, "DefaultAzureCredential", Mock(return_value=credential))
     constructor = Mock(return_value=client)
     monkeypatch.setattr(server, "CosmosClient", constructor)
     if stage == "client":

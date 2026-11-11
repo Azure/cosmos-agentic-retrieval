@@ -8,10 +8,23 @@ import pytest
 
 from cosmos_agentic_retriever.agent.loop import (
     LlmTurn,
+    TokenUsage,
     Tool,
     ToolCall,
     run_agent_search,
 )
+
+
+def test_token_usage_sum_is_unknown_when_either_count_is_unknown():
+    known = TokenUsage(
+        prompt_tokens=10, completion_tokens=2, cached_prompt_tokens=4, reasoning_tokens=1
+    )
+    partly_known = TokenUsage(prompt_tokens=5, completion_tokens=3)
+
+    assert known + known == TokenUsage(
+        prompt_tokens=20, completion_tokens=4, cached_prompt_tokens=8, reasoning_tokens=2
+    )
+    assert known + partly_known == TokenUsage(prompt_tokens=15, completion_tokens=5)
 
 
 def _answer(text: str) -> LlmTurn:

@@ -9,14 +9,16 @@ return an error so the loop can stop.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
 import structlog
 from openai import OpenAI
 from openai.types.chat import ChatCompletionMessageFunctionToolCall
+from openai.types.completion_usage import CompletionUsage
 
-from cosmos_agentic_retriever.agent.loop import LlmTurn, Tool, ToolCall
+from cosmos_agentic_retriever.agent.loop import LlmTurn, TokenUsage, Tool, ToolCall
 
 _logger = structlog.get_logger(__name__)
 
@@ -51,18 +53,35 @@ def _parse_arguments(raw: str | None) -> dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {}
 
 
+def _read_usage(usage: CompletionUsage | None) -> TokenUsage:
+    """Copy the reply's token counts; endpoints may omit any of them."""
+    if usage is None:
+        return TokenUsage()
+    prompt_details = usage.prompt_tokens_details
+    completion_details = usage.completion_tokens_details
+    return TokenUsage(
+        prompt_tokens=usage.prompt_tokens,
+        completion_tokens=usage.completion_tokens,
+        cached_prompt_tokens=prompt_details.cached_tokens if prompt_details else None,
+        reasoning_tokens=(
+            completion_details.reasoning_tokens if completion_details else None
+        ),
+    )
+
+
 @dataclass
 class ChatClient:
     """Send messages to the configured OpenAI-compatible chat endpoint.
 
-    base_url is the API address; model is the model or deployment name. params
-    adds request options such as max_completion_tokens and temperature. The
-    client supplies model, messages, and tools even if params contains those keys.
+    base_url is the API address; model is the model or deployment name. api_key is
+    a key, or a function returning a fresh Entra token. params adds request options
+    such as max_completion_tokens and temperature. The client supplies model,
+    messages, and tools even if params contains those keys.
     """
 
     base_url: str
     model: str
-    api_key: str = "unused"
+    api_key: str | Callable[[], str] = "unused"
     params: dict[str, Any] = field(default_factory=dict)
     timeout: float = 60.0
 
@@ -120,7 +139,10 @@ class ChatClient:
                     for call in function_calls
                 ]
             return LlmTurn(
-                message=message, content=choice.content, tool_calls=tool_calls
+                message=message,
+                content=choice.content,
+                tool_calls=tool_calls,
+                usage=_read_usage(response.usage),
             )
         except Exception as exc:
             _logger.exception("model_call_failed", model=self.model)
