@@ -22,6 +22,10 @@ python tests/benchmarks/load_corpus_to_cosmos.py --subscription <id> \
     --embedding-deployment text-embedding-3-small --embedding-field embedding_te3_small
 ```
 
+To load part of a corpus, pass `--document-ids-file` with one document ID per
+line. Running again with a longer list, or without one, adds the remaining
+documents; passages already in the container are skipped.
+
 ## Run
 
 `run.py` sends every question to agentic search, then scores the answer with a

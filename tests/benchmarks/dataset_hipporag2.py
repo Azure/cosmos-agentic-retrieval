@@ -8,8 +8,8 @@ from dataclasses import dataclass
 
 from dataset_contracts import (
     BenchmarkCollection,
+    Document,
     HFBenchmarkDataset,
-    Passage,
     Question,
 )
 
@@ -32,10 +32,10 @@ class HippoRAG2Dataset(HFBenchmarkDataset):
     repo = "osunlp/HippoRAG_2"
     revision = "5ec05b38deecc3318bb432c69865959c56058990"
 
-    def read_corpus_passages(self) -> list[Passage]:
+    def read_corpus_documents(self) -> list[Document]:
         records = json.loads(self.download_file(f"{self.name}_corpus.json").read_text())
         return [
-            Passage.from_title_and_text(r["title"], r["text"], self.name)
+            Document.from_title_and_text(r["title"], r["text"], self.name)
             for r in records
         ]
 
@@ -128,9 +128,9 @@ class HippoRAG2Collection(BenchmarkCollection):
 
 if __name__ == "__main__":
     collection = HippoRAG2Collection()
-    passages = collection.read_merged_corpus_passages()
+    documents = collection.read_merged_corpus_documents()
     questions = collection.read_questions()
     for dataset in collection.datasets:
         count = sum(q.dataset == dataset.name for q in questions)
         print(f"{dataset.name}: {count} questions")
-    print(f"{len(passages)} unique passages")
+    print(f"{len(documents)} unique documents")

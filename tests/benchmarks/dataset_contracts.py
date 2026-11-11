@@ -1,4 +1,4 @@
-"""Contracts for question-answering benchmarks, and loading them into Passage and Question objects.
+"""Contracts for question-answering benchmarks, and loading them into Document, Passage and Question objects.
 
 To add a dataset, subclass `BenchmarkDataset`, or `HFBenchmarkDataset` for one
 stored on Hugging Face.
@@ -17,7 +17,10 @@ from huggingface_hub import hf_hub_download
 
 @dataclass(frozen=True)
 class Passage:
-    """One corpus document, e.g. a Wikipedia paragraph."""
+    """One searchable unit stored in Cosmos DB, e.g. a Wikipedia paragraph or part of a long document.
+
+    Every field is stored on the passage's Cosmos DB item.
+    """
 
     id: str
     title: str
@@ -25,11 +28,31 @@ class Passage:
     # Datasets whose corpus contains this passage, e.g. ("hotpotqa", "musique").
     datasets: tuple[str, ...]
 
+
+@dataclass(frozen=True)
+class Document:
+    """One corpus document as a dataset provides it.
+
+    By default it is stored as a single passage with the same ID and fields. A
+    dataset whose documents are long or carry more fields subclasses this and
+    overrides get_passages.
+    """
+
+    id: str
+    title: str
+    text: str
+    # Datasets whose corpus contains this document, e.g. ("hotpotqa", "musique").
+    datasets: tuple[str, ...]
+
     @classmethod
-    def from_title_and_text(cls, title: str, text: str, dataset: str) -> Passage:
-        """Build a passage whose ID comes from its content, so every dataset and reload agrees on it."""
-        passage_id = hashlib.sha256(f"{title}\n{text}".encode()).hexdigest()[:32]
-        return cls(passage_id, title, text, (dataset,))
+    def from_title_and_text(cls, title: str, text: str, dataset: str) -> Document:
+        """Build a document whose ID comes from its content, so every dataset and reload agrees on it."""
+        document_id = hashlib.sha256(f"{title}\n{text}".encode()).hexdigest()[:32]
+        return cls(document_id, title, text, (dataset,))
+
+    def get_passages(self) -> list[Passage]:
+        """Return the passages to store for this document."""
+        return [Passage(self.id, self.title, self.text, self.datasets)]
 
 
 @dataclass(frozen=True)
@@ -46,13 +69,13 @@ class Question:
 
 
 class BenchmarkDataset(ABC):
-    """A question set and the corpus of passages it is answered from."""
+    """A question set and the corpus of documents it is answered from."""
 
     name: ClassVar[str]
 
     @abstractmethod
-    def read_corpus_passages(self) -> list[Passage]:
-        """Return every corpus passage."""
+    def read_corpus_documents(self) -> list[Document]:
+        """Return every corpus document."""
 
     @abstractmethod
     def read_questions(self) -> list[Question]:
@@ -84,19 +107,19 @@ class BenchmarkCollection:
     name: ClassVar[str]
     datasets: ClassVar[tuple[BenchmarkDataset, ...]]
 
-    def read_merged_corpus_passages(self) -> list[Passage]:
-        """Return every dataset's passages, keeping passages shared by several datasets once."""
-        passages: dict[str, Passage] = {}
+    def read_merged_corpus_documents(self) -> list[Document]:
+        """Return every dataset's documents, keeping documents shared by several datasets once."""
+        documents: dict[str, Document] = {}
         for dataset in self.datasets:
-            for passage in dataset.read_corpus_passages():
-                existing = passages.get(passage.id)
+            for document in dataset.read_corpus_documents():
+                existing = documents.get(document.id)
                 if existing is None:
-                    passages[passage.id] = passage
+                    documents[document.id] = document
                 elif dataset.name not in existing.datasets:
-                    passages[passage.id] = replace(
+                    documents[document.id] = replace(
                         existing, datasets=(*existing.datasets, dataset.name)
                     )
-        return list(passages.values())
+        return list(documents.values())
 
     def read_questions(self) -> list[Question]:
         """Return every dataset's questions."""
