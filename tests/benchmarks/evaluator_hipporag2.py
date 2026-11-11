@@ -1,4 +1,4 @@
-"""Score an answer and the retrieved passages against a benchmark question.
+"""Scores agentic search answers to HippoRAG 2 questions.
 
 Answer scores follow the standard SQuAD/HotpotQA definitions: lowercase, drop
 punctuation and the articles a/an/the, then compare words. Each score takes the
@@ -10,7 +10,8 @@ import re
 import string
 from collections import Counter
 
-from openai import OpenAI
+from dataset_hipporag2 import HippoRAGQuestion
+from evaluation_contracts import AgentResponse, EvaluationResult, Evaluator
 
 JUDGE_PROMPT = """Question: {question}
 Accepted answers: {answers}
@@ -45,27 +46,34 @@ def compute_f1(prediction: str, answers: tuple[str, ...]) -> float:
     return best
 
 
-def judge_answer_with_model(
-    client: OpenAI, model: str, question: str, answers: tuple[str, ...], prediction: str
-) -> tuple[float, dict[str, int | None]]:
-    """Score 1.0 if the judge model says the prediction matches an accepted answer, else 0.0.
-
-    Also return the judge call's token counts, None where the endpoint did not report them.
-    """
-    prompt = JUDGE_PROMPT.format(question=question, answers="; ".join(answers), prediction=prediction)
-    response = client.chat.completions.create(
-        model=model, messages=[{"role": "user", "content": prompt}]
-    )
-    verdict = (response.choices[0].message.content or "").strip().lower()
-    usage = response.usage
-    tokens = {
-        "prompt_tokens": usage.prompt_tokens if usage else None,
-        "completion_tokens": usage.completion_tokens if usage else None,
-    }
-    return float(verdict.startswith("correct")), tokens
-
-
 def compute_gold_title_recall(retrieved_titles: list[str], gold_titles: tuple[str, ...]) -> float:
     """Fraction of the gold passage titles that appear among the retrieved passages."""
     found = set(retrieved_titles)
     return sum(title in found for title in gold_titles) / len(gold_titles)
+
+
+class HippoRAGEvaluator(Evaluator[HippoRAGQuestion]):
+    """Exact match, F1 and judge accuracy of the answer, and recall of the gold passage titles."""
+
+    name = "hipporag2"
+
+    def evaluate(self, question: HippoRAGQuestion, response: AgentResponse) -> EvaluationResult:
+        answer = response.answer
+        if answer:
+            prompt = JUDGE_PROMPT.format(
+                question=question.question, answers="; ".join(question.answers), prediction=answer
+            )
+            verdict, judge_tokens = self.judge.ask(prompt)
+            judge_score = float(verdict.strip().lower().startswith("correct"))
+        else:
+            judge_score, judge_tokens = 0.0, {"prompt_tokens": 0, "completion_tokens": 0}
+        titles = [d.fields.get("/title", "") for d in response.documents]
+        return EvaluationResult(
+            scores={
+                "exact_match": compute_exact_match(answer, question.answers),
+                "f1": compute_f1(answer, question.answers),
+                "judge": judge_score,
+                "gold_title_recall": compute_gold_title_recall(titles, question.gold_titles),
+            },
+            judge_tokens=judge_tokens,
+        )

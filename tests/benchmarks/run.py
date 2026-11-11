@@ -1,16 +1,16 @@
-"""Run a benchmark collection's questions through agentic search and score the answers.
+"""Run a benchmark collection's questions through agentic search and save the responses.
 
 By default the service runs inside this process against the corpus loaded by
-load_corpus_to_cosmos.py, signing in with `az login`. With --toolkit-url, each
-question instead goes to a deployed MCP toolkit's agentic_search tool, and the
-deployment's own retriever settings apply. The judge model, and the agent model
-for in-process runs, come from LLM_BASE_URL, LLM_MODEL and LLM_API_KEY. Without
-LLM_API_KEY, the judge model is called with an Entra token from `az login`.
+load_corpus_to_cosmos.py, signing in with `az login`; its agent model comes from
+LLM_BASE_URL, LLM_MODEL and LLM_API_KEY. With --toolkit-url, each question
+instead goes to a deployed MCP toolkit's agentic_search tool, and the
+deployment's own retriever settings apply. evaluate.py scores the saved run.
 
 Each run writes one JSON file holding its settings, a summary, and one record
-per question. A failed question is recorded and the run moves on; on Ctrl+C the
-finished questions are still written. --resume-file reruns only the failed or
-missing questions of an earlier run, with that run's settings, into a new file.
+per question with the service's response. A failed question is recorded and the
+run moves on; on Ctrl+C the finished questions are still written. --resume-file
+reruns only the failed or missing questions of an earlier run, with that run's
+settings, into a new file.
 
 Examples:
     python tests/benchmarks/run.py --account-uri https://<account>.documents.azure.com:443/ \
@@ -25,7 +25,6 @@ Without --questions-per-dataset, every question is run.
 import argparse
 import json
 import math
-import os
 import random
 import statistics
 import subprocess
@@ -42,31 +41,22 @@ from typing import Any
 import anyio
 import httpx
 from azure.core.credentials import AccessToken
-from azure.identity import AzureCliCredential, get_bearer_token_provider
+from azure.identity import AzureCliCredential
 from fastapi.testclient import TestClient
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 from mcp.types import TextContent
-from openai import OpenAI
 from tqdm import tqdm
 
 from cosmos_agentic_retriever.config import RetrieverConfig
-from cosmos_agentic_retriever.server import LLM_TOKEN_SCOPE, create_app
+from cosmos_agentic_retriever.server import create_app
 from dataset_contracts import Question
-from dataset_hipporag2 import HippoRAG2Collection, HippoRAGQuestion
-from scoring import (
-    compute_exact_match,
-    compute_f1,
-    compute_gold_title_recall,
-    judge_answer_with_model,
-)
+from dataset_hipporag2 import HippoRAG2Collection
 
 COLLECTIONS = {"hipporag2": HippoRAG2Collection}
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RUNS_DIR = REPO_ROOT / ".live-data" / "benchmark-runs"
-METRICS = ("exact_match", "f1", "judge", "gold_title_recall")
 AGENT_TOKEN_FIELDS = ("prompt_tokens", "completion_tokens", "cached_prompt_tokens", "reasoning_tokens")
-JUDGE_TOKEN_FIELDS = ("prompt_tokens", "completion_tokens")
 MAX_DOCUMENTS = 10
 # Settings that decide which questions run and where; a resumed run reuses them.
 RUN_SETTINGS = (
@@ -175,51 +165,20 @@ def start_toolkit_search(settings: dict[str, Any]) -> SearchFn:
     return lambda query: anyio.run(call_agentic_search, query)
 
 
-def answer_and_score_question(
-    search: SearchFn, judge: OpenAI, judge_model: str, question: HippoRAGQuestion
-) -> dict[str, Any]:
-    """Run one question and score it, recording any failure instead of raising."""
+def answer_question(search: SearchFn, question: Question) -> dict[str, Any]:
+    """Run one question and keep the service's response, recording any failure instead of raising."""
     record: dict[str, Any] = {
         "dataset": question.dataset,
         "question_id": question.id,
         "question": question.question,
-        "answers": list(question.answers),
     }
     try:
         started = time.monotonic()
         body = search(question.question)
         record["latency_seconds"] = round(time.monotonic() - started, 2)
         if "error" in body:
-            return {**record, "status": "error", "error": str(body["error"])}
-        prediction = body.get("answer") or ""
-        titles = [d["text_fields"].get("/title", "") for d in body.get("documents", [])]
-        if prediction:
-            judge_score, judge_tokens = judge_answer_with_model(
-                judge, judge_model, question.question, question.answers, prediction
-            )
-        else:
-            judge_score, judge_tokens = 0.0, dict.fromkeys(JUDGE_TOKEN_FIELDS, 0)
-        return {
-            **record,
-            "status": "ok",
-            "error": None,
-            "prediction": prediction,
-            "scores": {
-                "exact_match": compute_exact_match(prediction, question.answers),
-                "f1": compute_f1(prediction, question.answers),
-                "judge": judge_score,
-                "gold_title_recall": compute_gold_title_recall(titles, question.gold_titles),
-            },
-            "retrieved_titles": titles,
-            "model": body.get("model"),
-            "terminal_reason": body.get("terminal_reason"),
-            "turns": body.get("turns"),
-            "tool_calls": body.get("tool_calls", {}),
-            "partial": body.get("partial", False),
-            # A service without usage reporting leaves every count unknown.
-            "agent_tokens": body.get("usage") or dict.fromkeys(AGENT_TOKEN_FIELDS),
-            "judge_tokens": judge_tokens,
-        }
+            return {**record, "status": "error", "error": str(body["error"]), "response": body}
+        return {**record, "status": "ok", "error": None, "response": body}
     except Exception as exc:
         return {**record, "status": "error", "error": f"{type(exc).__name__}: {exc}"}
 
@@ -245,7 +204,7 @@ def summarize_token_counts(counts: list[dict[str, int | None]], names: tuple[str
 
 
 def summarize_records(records: list[dict[str, Any]]) -> dict[str, Any]:
-    """Scores, latency, agent behavior and token use over the answered questions."""
+    """Latency, agent behavior and token use over the answered questions."""
     answered = [r for r in records if r["status"] == "ok"]
     summary: dict[str, Any] = {
         "questions": len(records),
@@ -254,30 +213,27 @@ def summarize_records(records: list[dict[str, Any]]) -> dict[str, Any]:
     }
     if not answered:
         return summary
+    responses = [r["response"] for r in answered]
     latencies = sorted(r["latency_seconds"] for r in answered)
     tool_calls: Counter[str] = Counter()
-    for record in answered:
-        tool_calls.update(record["tool_calls"])
+    for response in responses:
+        tool_calls.update(response.get("tool_calls", {}))
     summary.update(
-        scores={
-            m: round(statistics.fmean(r["scores"][m] for r in answered), 3) for m in METRICS
-        },
         latency_seconds={
             "mean": round(statistics.fmean(latencies), 2),
             **{f"p{p}": compute_percentile(latencies, p) for p in (50, 90, 95, 99)},
             "max": latencies[-1],
         },
-        mean_turns=round(statistics.fmean(r["turns"] or 0 for r in answered), 2),
+        mean_turns=round(statistics.fmean(r.get("turns") or 0 for r in responses), 2),
         mean_tool_calls={
             name: round(count / len(answered), 2) for name, count in sorted(tool_calls.items())
         },
-        terminal_reasons=dict(Counter(r["terminal_reason"] for r in answered)),
-        partial=sum(r["partial"] for r in answered),
+        terminal_reasons=dict(Counter(r.get("terminal_reason") for r in responses)),
+        partial=sum(bool(r.get("partial")) for r in responses),
         agent_tokens=summarize_token_counts(
-            [r["agent_tokens"] for r in answered], AGENT_TOKEN_FIELDS
-        ),
-        judge_tokens=summarize_token_counts(
-            [r["judge_tokens"] for r in answered], JUDGE_TOKEN_FIELDS
+            # A service without usage reporting leaves every count unknown.
+            [r.get("usage") or {} for r in responses],
+            AGENT_TOKEN_FIELDS,
         ),
     )
     return summary
@@ -300,24 +256,20 @@ def write_run_file(path: Path, metadata: dict[str, Any], records: list[dict[str,
 
 
 def print_summary(path: Path) -> None:
-    """Print each dataset's scores, answered count and p50/p99 latency."""
+    """Print each dataset's answered count, p50/p99 latency and mean turns."""
     summary = json.loads(path.read_text())["summary"]
-    print(
-        f"{'dataset':<18}{'answered':>10}"
-        + "".join(f"{m:>18}" for m in METRICS)
-        + f"{'p50 s':>8}{'p99 s':>8}"
-    )
+    print(f"{'dataset':<18}{'answered':>10}{'p50 s':>8}{'p99 s':>8}{'turns':>8}")
     for dataset, values in summary.items():
-        scores = values.get("scores", {})
         latency = values.get("latency_seconds", {})
         print(
             f"{dataset:<18}{values['answered']:>4}/{values['questions']:<5}"
-            + "".join(f"{scores[m]:>18.3f}" if m in scores else f"{'-':>18}" for m in METRICS)
             + "".join(
                 f"{latency[p]:>8.1f}" if p in latency else f"{'-':>8}" for p in ("p50", "p99")
             )
+            + (f"{values['mean_turns']:>8.2f}" if "mean_turns" in values else f"{'-':>8}")
         )
     print(f"Results: {path}")
+    print(f"Score it with: python tests/benchmarks/evaluate.py {path}")
 
 
 def read_git_commit() -> str:
@@ -379,16 +331,9 @@ def main() -> None:
     )
     done = {(r["dataset"], r["question_id"]) for r in kept}
     pending = [q for q in questions if (q.dataset, q.id) not in done]
-    judge_model = os.environ["LLM_MODEL"]
-    judge = OpenAI(
-        base_url=os.environ["LLM_BASE_URL"],
-        api_key=os.environ.get("LLM_API_KEY")
-        or get_bearer_token_provider(AzureCliCredential(), LLM_TOKEN_SCOPE),
-    )
     metadata = {
         "settings": settings,
         "runner_commit": read_git_commit(),
-        "judge_model": judge_model,
         "resumed_from": str(args.resume_file) if args.resume_file else None,
         "started_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -403,10 +348,7 @@ def main() -> None:
             search = start_in_process_search(stack, settings)
         pool = ThreadPoolExecutor(args.workers)
         try:
-            futures = [
-                pool.submit(answer_and_score_question, search, judge, judge_model, q)
-                for q in pending
-            ]
+            futures = [pool.submit(answer_question, search, q) for q in pending]
             for future in tqdm(as_completed(futures), total=len(futures), desc="Answering"):
                 records.append(future.result())
         finally:

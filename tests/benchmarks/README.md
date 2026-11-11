@@ -28,10 +28,10 @@ documents; passages already in the container are skipped.
 
 ## Run
 
-`run.py` sends every question to agentic search, then scores the answer with a
-judge model. A model endpoint is required: set the model as environment
-variables in your shell first; these are the same `LLM_*` variables the service
-reads:
+`run.py` sends every question to agentic search and saves the responses;
+`evaluate.py` then scores them. A model endpoint is required: set the model as
+environment variables in your shell first; these are the same `LLM_*` variables
+the service reads:
 
 ```bash
 export LLM_BASE_URL='https://<resource>.services.ai.azure.com/openai/v1'
@@ -43,7 +43,7 @@ There are two ways to run the questions.
 
 **In-process** (default). `run.py` starts the service inside its own process,
 pointed at the corpus container you loaded above. The model variables are used
-for both the agent and the judge, and Cosmos DB is reached with your `az login`:
+for the agent, and Cosmos DB is reached with your `az login`:
 
 ```bash
 python tests/benchmarks/run.py --account-uri https://<account>.documents.azure.com:443/ \
@@ -53,8 +53,8 @@ python tests/benchmarks/run.py --account-uri https://<account>.documents.azure.c
 **Through a deployed toolkit**. `run.py` calls the toolkit's `agentic_search` MCP
 tool, signed in with your `az login`. The agent runs in the deployed retriever
 with that deployment's own configuration (model, turn limit and containers);
-the model variables are only used for the judge. The retriever must be
-configured to search the corpus container:
+the model variables are not used. The retriever must be configured to search
+the corpus container:
 
 ```bash
 python tests/benchmarks/run.py --toolkit-url https://<toolkit-app>/mcp \
@@ -65,18 +65,24 @@ python tests/benchmarks/run.py --toolkit-url https://<toolkit-app>/mcp \
 Without `--questions-per-dataset`, all 5,000 questions run.
 
 Each run writes one JSON file under `.live-data/benchmark-runs/` with its
-settings, a per-dataset summary and a record per question. A failed question is
-recorded and the run continues; `--resume-file <run>.json` reruns only failed or
-missing questions, with the earlier run's settings, into a new file.
+settings, a per-dataset summary (latency, turns, tool calls and agent token
+use) and each question's response. A failed question is recorded and the run
+continues; `--resume-file <run>.json` reruns only failed or missing questions,
+with the earlier run's settings, into a new file.
 
-## Scores
+## Evaluate
 
+`evaluate.py` scores a saved run with the collection's evaluator, using the
+model variables as the judge, and writes `<run>.scores.json` next to the run:
+
+```bash
+python tests/benchmarks/evaluate.py .live-data/benchmark-runs/<run>.json
+```
+
+The HippoRAG 2 evaluator reports:
 - **Judge accuracy**: the judge model decides whether the answer matches a
   reference answer.
 - **Gold passage recall**: share of the question's supporting passages among
   the returned documents.
 - **Exact match** and **F1**: standard SQuAD-style word matching. The agent
   answers in sentences, so these understate correct answers.
-
-The summary also reports latency percentiles, turns, tool calls, and agent and
-judge token use.
