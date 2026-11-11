@@ -4,7 +4,8 @@ By default the service runs inside this process against the corpus loaded by
 load_corpus_to_cosmos.py, signing in with `az login`. With --toolkit-url, each
 question instead goes to a deployed MCP toolkit's agentic_search tool, and the
 deployment's own retriever settings apply. The judge model, and the agent model
-for in-process runs, come from LLM_BASE_URL, LLM_MODEL and LLM_API_KEY.
+for in-process runs, come from LLM_BASE_URL, LLM_MODEL and LLM_API_KEY. Without
+LLM_API_KEY, the judge model is called with an Entra token from `az login`.
 
 Each run writes one JSON file holding its settings, a summary, and one record
 per question. A failed question is recorded and the run moves on; on Ctrl+C the
@@ -41,7 +42,7 @@ from typing import Any
 import anyio
 import httpx
 from azure.core.credentials import AccessToken
-from azure.identity import AzureCliCredential
+from azure.identity import AzureCliCredential, get_bearer_token_provider
 from fastapi.testclient import TestClient
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
@@ -50,7 +51,7 @@ from openai import OpenAI
 from tqdm import tqdm
 
 from cosmos_agentic_retriever.config import RetrieverConfig
-from cosmos_agentic_retriever.server import create_app
+from cosmos_agentic_retriever.server import LLM_TOKEN_SCOPE, create_app
 from dataset_contracts import Question
 from dataset_hipporag2 import HippoRAG2Collection
 from scoring import (
@@ -380,7 +381,9 @@ def main() -> None:
     pending = [q for q in questions if (q.dataset, q.id) not in done]
     judge_model = os.environ["LLM_MODEL"]
     judge = OpenAI(
-        base_url=os.environ["LLM_BASE_URL"], api_key=os.environ.get("LLM_API_KEY", "unused")
+        base_url=os.environ["LLM_BASE_URL"],
+        api_key=os.environ.get("LLM_API_KEY")
+        or get_bearer_token_provider(AzureCliCredential(), LLM_TOKEN_SCOPE),
     )
     metadata = {
         "settings": settings,
