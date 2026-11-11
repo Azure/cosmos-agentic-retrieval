@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from cosmos_agentic_retriever.agent.loop import Tool
+from cosmos_agentic_retriever.agent.tool_contracts import Tool
 from cosmos_agentic_retriever.orchestration import MultiSearchResult
 
 SearchFn = Callable[[str, int], MultiSearchResult]
@@ -70,7 +70,7 @@ def make_full_text_search_tool(
         "additionalProperties": False,
     }
 
-    def handler(arguments: dict) -> str:
+    def search_once(arguments: dict) -> str:
         query = arguments.get("query")
         if not isinstance(query, str) or not query.strip():
             return "Error: 'query' is required and must be a non-empty string."
@@ -80,6 +80,9 @@ def make_full_text_search_tool(
         count = max(1, min(requested, max_documents_cap))
         result = search(query, count)
         return _format_results(result)
+
+    def handler(calls: list[dict]) -> list[str]:
+        return [search_once(arguments) for arguments in calls]
 
     return Tool(
         name="full_text_search",

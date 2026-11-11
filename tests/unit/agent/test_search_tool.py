@@ -22,14 +22,14 @@ def _item(item_id: str, text: str, retrieval_id: str) -> ContainerItem:
 
 def test_missing_query_returns_error():
     tool = make_full_text_search_tool(lambda q, n: _result())
-    assert tool.handler({}).startswith("Error:")
-    assert tool.handler({"query": "  "}).startswith("Error:")
+    assert tool().content.startswith("Error:")
+    assert tool(query="  ").content.startswith("Error:")
 
 
 def test_non_integer_max_documents_returns_error():
     tool = make_full_text_search_tool(lambda q, n: _result())
-    assert "integer" in tool.handler({"query": "x", "max_documents": "5"})
-    assert "integer" in tool.handler({"query": "x", "max_documents": True})
+    assert "integer" in tool(query="x", max_documents="5").content
+    assert "integer" in tool(query="x", max_documents=True).content
 
 
 def test_max_documents_is_clamped_to_cap():
@@ -40,8 +40,7 @@ def test_max_documents_is_clamped_to_cap():
         return _result()
 
     tool = make_full_text_search_tool(search, max_documents_cap=20)
-    tool.handler({"query": "x", "max_documents": 100})
-    tool.handler({"query": "x", "max_documents": 0})
+    tool.handler([{"query": "x", "max_documents": 100}, {"query": "x", "max_documents": 0}])
     assert seen == [20, 1]
 
 
@@ -52,7 +51,7 @@ def test_default_count_used_when_omitted():
         seen.append(count)
         return _result()
 
-    make_full_text_search_tool(search, default_max_documents=7).handler({"query": "x"})
+    make_full_text_search_tool(search, default_max_documents=7)(query="x")
     assert seen == [7]
 
 
@@ -63,11 +62,11 @@ def test_formats_items_with_retrieval_id_and_text():
             _item("a2", "more context", "D/A:k2"),
         )
     )
-    text = tool.handler({"query": "x"})
+    text = tool(query="x").content
     assert "[D/A:k1]" in text and "the answer is 42" in text
     assert "[D/A:k2]" in text and "more context" in text
 
 
 def test_empty_results_message():
     tool = make_full_text_search_tool(lambda q, n: _result())
-    assert "No results" in tool.handler({"query": "x"})
+    assert "No results" in tool(query="x").content

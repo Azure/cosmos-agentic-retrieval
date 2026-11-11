@@ -7,7 +7,8 @@ from openai.types.chat import ChatCompletion
 from openai.types.completion_usage import CompletionUsage
 
 from cosmos_agentic_retriever.agent import chat_client
-from cosmos_agentic_retriever.agent.loop import TokenUsage, Tool, ToolCall
+from cosmos_agentic_retriever.agent.loop import TokenUsage
+from cosmos_agentic_retriever.agent.tool_contracts import InvalidToolCall, Tool, ToolCall
 
 
 @pytest.fixture
@@ -105,7 +106,28 @@ def test_complete_returns_token_usage(client):
 
 @pytest.mark.parametrize(
     "arguments, expected",
-    [(' {"query": "recycling"} ', {"query": "recycling"}), ("broken", {}), ("[]", {})],
+    [
+        (' {"query": "recycling"} ', ToolCall("call-1", "full_text_search", {"query": "recycling"})),
+        ("", ToolCall("call-1", "full_text_search", {})),
+        (
+            "broken",
+            InvalidToolCall(
+                "call-1",
+                "full_text_search",
+                "broken",
+                "arguments for 'full_text_search' are not valid JSON.",
+            ),
+        ),
+        (
+            "[]",
+            InvalidToolCall(
+                "call-1",
+                "full_text_search",
+                "[]",
+                "arguments for 'full_text_search' must be a JSON object, got list.",
+            ),
+        ),
+    ],
 )
 def test_complete_returns_tool_calls_for_the_loop(client, arguments, expected):
     chat, create = client
@@ -119,7 +141,7 @@ def test_complete_returns_tool_calls_for_the_loop(client, arguments, expected):
     turn = chat.complete([], [])
 
     assert turn.error is None
-    assert turn.tool_calls == [ToolCall("call-1", "full_text_search", expected)]
+    assert turn.tool_calls == [expected]
     assert turn.message["tool_calls"] == [call]
 
 

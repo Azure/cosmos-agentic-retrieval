@@ -16,7 +16,8 @@ from openai import OpenAI
 from cosmos_agentic_retriever import server
 from cosmos_agentic_retriever.agent import chat_client
 from cosmos_agentic_retriever.agent.chat_client import ChatClient
-from cosmos_agentic_retriever.agent.loop import LlmTurn, TokenUsage, ToolCall
+from cosmos_agentic_retriever.agent.loop import LlmTurn, TokenUsage
+from cosmos_agentic_retriever.agent.tool_contracts import ToolCall
 from cosmos_agentic_retriever.config import RetrieverConfig
 from cosmos_agentic_retriever.orchestration import (
     ContainerItem,

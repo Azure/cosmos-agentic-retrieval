@@ -18,7 +18,8 @@ from openai import OpenAI
 from openai.types.chat import ChatCompletionMessageFunctionToolCall
 from openai.types.completion_usage import CompletionUsage
 
-from cosmos_agentic_retriever.agent.loop import LlmTurn, TokenUsage, Tool, ToolCall
+from cosmos_agentic_retriever.agent.loop import LlmTurn, TokenUsage
+from cosmos_agentic_retriever.agent.tool_contracts import InvalidToolCall, Tool, ToolCall
 
 _logger = structlog.get_logger(__name__)
 
@@ -38,19 +39,28 @@ def to_openai_tools(tools: list[Tool]) -> list[dict[str, Any]]:
     ]
 
 
-def _parse_arguments(raw: str | None) -> dict[str, Any]:
-    """Decode the JSON arguments from a model's tool call.
+def _parse_tool_call(call_id: str, name: str, raw: str | None) -> ToolCall | InvalidToolCall:
+    """Decode a tool call's JSON arguments; empty arguments mean no arguments.
 
-    Invalid JSON or a value other than an object becomes an empty dict, so the
-    tool's argument checks can report missing required fields to the model.
+    Arguments that are not valid JSON, or not a JSON object, give an
+    InvalidToolCall carrying the raw text and the reason.
     """
-    if not raw:
-        return {}
+    raw_arguments = raw or "{}"
     try:
-        parsed = json.loads(raw)
+        arguments = json.loads(raw_arguments)
     except json.JSONDecodeError:
-        return {}
-    return parsed if isinstance(parsed, dict) else {}
+        return InvalidToolCall(
+            call_id, name, raw_arguments, f"arguments for '{name}' are not valid JSON."
+        )
+    if not isinstance(arguments, dict):
+        return InvalidToolCall(
+            call_id,
+            name,
+            raw_arguments,
+            f"arguments for '{name}' must be a JSON object, got "
+            f"{type(arguments).__name__}.",
+        )
+    return ToolCall(call_id, name, arguments)
 
 
 def _read_usage(usage: CompletionUsage | None) -> TokenUsage:
@@ -117,7 +127,7 @@ class ChatClient:
                 if not isinstance(call, ChatCompletionMessageFunctionToolCall):
                     raise TypeError(f"Unsupported tool call type: {call.type!r}.")
                 function_calls.append(call)
-            tool_calls: list[ToolCall] = []
+            tool_calls: list[ToolCall | InvalidToolCall] = []
             if function_calls:
                 message["tool_calls"] = [
                     {
@@ -131,11 +141,7 @@ class ChatClient:
                     for call in function_calls
                 ]
                 tool_calls = [
-                    ToolCall(
-                        id=call.id,
-                        name=call.function.name,
-                        arguments=_parse_arguments(call.function.arguments),
-                    )
+                    _parse_tool_call(call.id, call.function.name, call.function.arguments)
                     for call in function_calls
                 ]
             return LlmTurn(

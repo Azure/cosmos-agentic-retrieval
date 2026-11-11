@@ -6,8 +6,10 @@ makes the API request and returns the reply and requested tool calls; it does
 not execute them.
 
 This loop executes the tool calls, adds their results to the conversation, and
-asks the model again. It stops when a reply has no tool calls, a model call fails,
-or max_turns model calls have been made.
+asks the model again. A call whose arguments could not be parsed is not run; the
+model gets the parsing error instead. The loop stops when a reply has no tool
+calls, a model call fails, or max_turns model calls have been made. Tools follow
+the contract in tool_contracts.py.
 """
 
 from __future__ import annotations
@@ -18,32 +20,15 @@ from typing import Any
 
 import structlog
 
+from cosmos_agentic_retriever.agent.tool_contracts import (
+    InvalidToolCall,
+    Tool,
+    ToolCall,
+    ToolCallResponse,
+    execute_tool_call,
+)
+
 _logger = structlog.get_logger(__name__)
-
-
-@dataclass(frozen=True)
-class Tool:
-    """A capability the model can call: parsed arguments in, observation text out.
-
-    ``parameters`` is a JSON-Schema object describing the arguments. ``handler``
-    receives the parsed arguments and returns the text shown back to the model;
-    it should return an error string rather than raise for a bad call, though the
-    loop also catches exceptions.
-    """
-
-    name: str
-    description: str
-    parameters: dict[str, Any]
-    handler: Callable[[dict[str, Any]], str]
-
-
-@dataclass(frozen=True)
-class ToolCall:
-    """One tool request the model made this turn."""
-
-    id: str
-    name: str
-    arguments: dict[str, Any]
 
 
 @dataclass(frozen=True)
@@ -76,7 +61,7 @@ class LlmTurn:
 
     message: dict[str, Any]
     content: str | None = None
-    tool_calls: list[ToolCall] = field(default_factory=list)
+    tool_calls: list[ToolCall | InvalidToolCall] = field(default_factory=list)
     error: str | None = None
     usage: TokenUsage = field(default_factory=TokenUsage)
 
@@ -98,18 +83,22 @@ class AgentResult:
     usage: TokenUsage = field(default_factory=TokenUsage)
     # Calls the model made per tool name, including names of unknown tools.
     tool_calls: dict[str, int] = field(default_factory=dict)
+    # One response per tool call, in the order the calls ran.
+    tool_responses: list[ToolCallResponse] = field(default_factory=list)
 
 
-def _run_tool_call(tools_by_name: dict[str, Tool], call: ToolCall) -> str:
-    """Run one tool call, turning an unknown tool or a raised error into text."""
-    tool = tools_by_name.get(call.name)
-    if tool is None:
-        return f"Error: unknown tool {call.name!r}."
-    try:
-        return tool.handler(call.arguments)
-    except Exception as exc:  # a tool bug should not end the episode
-        _logger.exception("tool_call_failed", tool=call.name)
-        return f"Error: {type(exc).__name__}: {exc}"
+def _observation(response: ToolCallResponse) -> str:
+    """The text shown to the model for one tool call: its output or its error."""
+    return response.content if response.error is None else f"Error: {response.error}"
+
+
+def _respond(
+    tools_by_name: dict[str, Tool], call: ToolCall | InvalidToolCall
+) -> ToolCallResponse:
+    """Run a valid call; answer an unparseable one with its parsing error."""
+    if isinstance(call, InvalidToolCall):
+        return ToolCallResponse(call_id=call.id, content="", error=call.error)
+    return execute_tool_call(tools_by_name, call)
 
 
 def run_agent_search(
@@ -151,6 +140,7 @@ def run_agent_search(
         prompt_tokens=0, completion_tokens=0, cached_prompt_tokens=0, reasoning_tokens=0
     )
     tool_calls: dict[str, int] = {}
+    tool_responses: list[ToolCallResponse] = []
     for turn in range(1, max_turns + 1):
         reply = complete(messages, tools)
         messages.append(reply.message)
@@ -163,9 +153,12 @@ def run_agent_search(
             break
         for call in reply.tool_calls:
             tool_calls[call.name] = tool_calls.get(call.name, 0) + 1
-            observation = _run_tool_call(tools_by_name, call)
+            response = _respond(tools_by_name, call)
+            if response.error is not None:
+                _logger.warning("tool_call_failed", tool=call.name, error=response.error)
+            tool_responses.append(response)
             messages.append(
-                {"role": "tool", "tool_call_id": call.id, "content": observation}
+                {"role": "tool", "tool_call_id": call.id, "content": _observation(response)}
             )
 
     answer = ""
@@ -180,4 +173,5 @@ def run_agent_search(
         messages=messages,
         usage=usage,
         tool_calls=tool_calls,
+        tool_responses=tool_responses,
     )

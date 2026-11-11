@@ -11,18 +11,28 @@ from cosmos_agentic_retriever.agent.chat_client import ChatClient
 from cosmos_agentic_retriever.agent.loop import (
     AgentResult,
     LlmTurn,
-    Tool,
-    ToolCall,
     run_agent_search,
 )
 from cosmos_agentic_retriever.agent.search_tool import make_full_text_search_tool
+from cosmos_agentic_retriever.agent.tool_contracts import (
+    InvalidToolCall,
+    Tool,
+    ToolCall,
+    ToolCallResponse,
+    ToolExecutionResult,
+    execute_tool_call,
+)
 
 __all__ = [
     "AgentResult",
     "ChatClient",
+    "InvalidToolCall",
     "LlmTurn",
     "Tool",
     "ToolCall",
+    "ToolCallResponse",
+    "ToolExecutionResult",
+    "execute_tool_call",
     "make_full_text_search_tool",
     "run_agent_search",
 ]

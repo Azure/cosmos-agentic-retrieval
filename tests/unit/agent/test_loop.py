@@ -9,10 +9,9 @@ import pytest
 from cosmos_agentic_retriever.agent.loop import (
     LlmTurn,
     TokenUsage,
-    Tool,
-    ToolCall,
     run_agent_search,
 )
+from cosmos_agentic_retriever.agent.tool_contracts import InvalidToolCall, Tool, ToolCall
 
 
 def test_token_usage_sum_is_unknown_when_either_count_is_unknown():
@@ -62,9 +61,9 @@ class _ScriptedModel:
 
 
 def _echo_tool(record: list[dict]) -> Tool:
-    def handler(arguments: dict) -> str:
-        record.append(arguments)
-        return f"searched {arguments.get('query')!r}"
+    def handler(calls: list[dict]) -> list[str]:
+        record.extend(calls)
+        return [f"searched {arguments.get('query')!r}" for arguments in calls]
 
     return Tool(
         name="full_text_search",
@@ -106,6 +105,11 @@ def test_searches_then_answers():
     assert result.turns == 2
     roles = [message["role"] for message in result.messages]
     assert roles == ["system", "user", "assistant", "tool", "assistant"]
+    [response] = result.tool_responses
+    assert response.call_id == "c1"
+    assert response.content == "searched 'cats'"
+    assert response.error is None
+    assert response.tool_implementation == "full_text_search"
 
 
 def test_stops_at_max_turns_when_model_keeps_calling():
@@ -134,12 +138,39 @@ def test_unknown_tool_yields_error_observation_and_continues():
     )
     tool_messages = [m for m in result.messages if m["role"] == "tool"]
     assert "unknown tool" in tool_messages[0]["content"]
+    assert result.tool_responses[0].error == "unknown tool: does_not_exist"
     assert result.terminal_reason == "stop"
     assert result.answer == "ok"
 
 
+def test_invalid_arguments_are_reported_without_running_the_tool():
+    calls: list[dict] = []
+    invalid = InvalidToolCall("c1", "full_text_search", "broken", "not valid JSON.")
+    turn = LlmTurn(
+        message={"role": "assistant", "content": "", "tool_calls": []},
+        content="",
+        tool_calls=[invalid],
+    )
+    model = _ScriptedModel([turn, _answer("ok")])
+    result = run_agent_search(
+        "q",
+        complete=model,
+        tools=[_echo_tool(calls)],
+        system_prompt="sys",
+        max_turns=5,
+    )
+    tool_messages = [m for m in result.messages if m["role"] == "tool"]
+    assert calls == []
+    assert tool_messages == [
+        {"role": "tool", "tool_call_id": "c1", "content": "Error: not valid JSON."}
+    ]
+    assert result.tool_responses[0].error == "not valid JSON."
+    assert result.tool_calls == {"full_text_search": 1}
+    assert result.answer == "ok"
+
+
 def test_tool_exception_becomes_error_observation():
-    def boom(_arguments: dict) -> str:
+    def boom(_calls: list[dict]) -> list[str]:
         raise RuntimeError("kaboom")
 
     tool = Tool(
