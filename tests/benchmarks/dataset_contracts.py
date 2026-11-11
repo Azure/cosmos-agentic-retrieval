@@ -34,14 +34,15 @@ class Passage:
 
 @dataclass(frozen=True)
 class Question:
-    """One benchmark question with its accepted answers."""
+    """One benchmark question as sent to the agent.
+
+    Each dataset subclasses this with what its evaluation needs, such as
+    reference answers and the documents that support them.
+    """
 
     id: str
     dataset: str
     question: str
-    answers: tuple[str, ...]
-    # Titles of the passages needed to answer, used to score retrieval.
-    gold_titles: tuple[str, ...]
 
 
 class BenchmarkDataset(ABC):

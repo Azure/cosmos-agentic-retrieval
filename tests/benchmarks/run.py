@@ -53,7 +53,7 @@ from tqdm import tqdm
 from cosmos_agentic_retriever.config import RetrieverConfig
 from cosmos_agentic_retriever.server import LLM_TOKEN_SCOPE, create_app
 from dataset_contracts import Question
-from dataset_hipporag2 import HippoRAG2Collection
+from dataset_hipporag2 import HippoRAG2Collection, HippoRAGQuestion
 from scoring import (
     compute_exact_match,
     compute_f1,
@@ -176,7 +176,7 @@ def start_toolkit_search(settings: dict[str, Any]) -> SearchFn:
 
 
 def answer_and_score_question(
-    search: SearchFn, judge: OpenAI, judge_model: str, question: Question
+    search: SearchFn, judge: OpenAI, judge_model: str, question: HippoRAGQuestion
 ) -> dict[str, Any]:
     """Run one question and score it, recording any failure instead of raising."""
     record: dict[str, Any] = {

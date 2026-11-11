@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from abc import abstractmethod
+from dataclasses import dataclass
 
 from dataset_contracts import (
     BenchmarkCollection,
@@ -11,6 +12,14 @@ from dataset_contracts import (
     Passage,
     Question,
 )
+
+
+@dataclass(frozen=True)
+class HippoRAGQuestion(Question):
+    """A question with its accepted answers and the titles of its supporting passages."""
+
+    answers: tuple[str, ...]
+    gold_titles: tuple[str, ...]
 
 
 def _dedupe_keep_order(values) -> tuple[str, ...]:
@@ -30,20 +39,20 @@ class HippoRAG2Dataset(HFBenchmarkDataset):
             for r in records
         ]
 
-    def read_questions(self) -> list[Question]:
+    def read_questions(self) -> list[HippoRAGQuestion]:
         records = json.loads(self.download_file(f"{self.name}.json").read_text())
         return [self.parse_question_record(r, i) for i, r in enumerate(records)]
 
     @abstractmethod
-    def parse_question_record(self, record: dict, index: int) -> Question:
-        """Turn one question record, and its position in the file, into a Question."""
+    def parse_question_record(self, record: dict, index: int) -> HippoRAGQuestion:
+        """Turn one question record, and its position in the file, into a question."""
 
 
 class HotpotQA(HippoRAG2Dataset):
     name = "hotpotqa"
 
-    def parse_question_record(self, record: dict, index: int) -> Question:
-        return Question(
+    def parse_question_record(self, record: dict, index: int) -> HippoRAGQuestion:
+        return HippoRAGQuestion(
             id=record["_id"],
             dataset=self.name,
             question=record["question"],
@@ -55,8 +64,8 @@ class HotpotQA(HippoRAG2Dataset):
 class TwoWikiMultihopQA(HippoRAG2Dataset):
     name = "2wikimultihopqa"
 
-    def parse_question_record(self, record: dict, index: int) -> Question:
-        return Question(
+    def parse_question_record(self, record: dict, index: int) -> HippoRAGQuestion:
+        return HippoRAGQuestion(
             id=record["_id"],
             dataset=self.name,
             question=record["question"],
@@ -68,8 +77,8 @@ class TwoWikiMultihopQA(HippoRAG2Dataset):
 class MuSiQue(HippoRAG2Dataset):
     name = "musique"
 
-    def parse_question_record(self, record: dict, index: int) -> Question:
-        return Question(
+    def parse_question_record(self, record: dict, index: int) -> HippoRAGQuestion:
+        return HippoRAGQuestion(
             id=record["id"],
             dataset=self.name,
             question=record["question"],
@@ -83,9 +92,9 @@ class MuSiQue(HippoRAG2Dataset):
 class NaturalQuestions(HippoRAG2Dataset):
     name = "nq_rear"
 
-    def parse_question_record(self, record: dict, index: int) -> Question:
+    def parse_question_record(self, record: dict, index: int) -> HippoRAGQuestion:
         # This file has no question IDs, so the position in the file is used.
-        return Question(
+        return HippoRAGQuestion(
             id=f"{self.name}-{index}",
             dataset=self.name,
             question=record["question"],
@@ -99,8 +108,8 @@ class NaturalQuestions(HippoRAG2Dataset):
 class PopQA(HippoRAG2Dataset):
     name = "popqa"
 
-    def parse_question_record(self, record: dict, index: int) -> Question:
-        return Question(
+    def parse_question_record(self, record: dict, index: int) -> HippoRAGQuestion:
+        return HippoRAGQuestion(
             id=str(record["id"]),
             dataset=self.name,
             question=record["question"],
