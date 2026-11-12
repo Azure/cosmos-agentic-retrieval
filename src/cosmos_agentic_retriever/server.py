@@ -39,7 +39,7 @@ from cosmos_agentic_retriever.agent import (
     make_full_text_search_tool,
     run_agent_search,
 )
-from cosmos_agentic_retriever.agent.mcp_tools import signed_in_session
+from cosmos_agentic_retriever.agent.toolkit_client import ToolkitClient, toolkit_sessions
 from cosmos_agentic_retriever.agent.prompts import SYSTEM_PROMPT
 from cosmos_agentic_retriever.config import RetrieverConfig, get_config
 from cosmos_agentic_retriever.orchestration import (
@@ -198,17 +198,18 @@ def create_app(
             async_resources.push_async_callback(chat_client.close)
             app.state.chat_client = chat_client
             if resolved.toolkit_app_id is not None:
-                app.state.toolkit_session = signed_in_session(
-                    str(resolved.toolkit_mcp_url),
-                    get_bearer_token_provider(
-                        azure_identity(), toolkit_token_scope(resolved.toolkit_app_id)
-                    ),
+                url = str(resolved.toolkit_mcp_url)
+                get_token = get_bearer_token_provider(
+                    azure_identity(), toolkit_token_scope(resolved.toolkit_app_id)
+                )
+                app.state.toolkit = ToolkitClient(
+                    await async_resources.enter_async_context(toolkit_sessions(url, get_token))
                 )
             yield
         finally:
             app.state.retriever = None
             app.state.chat_client = None
-            app.state.toolkit_session = None
+            app.state.toolkit = None
             with anyio.CancelScope(shield=True):
                 await async_resources.aclose()
                 await anyio.to_thread.run_sync(resources.close)
@@ -221,7 +222,7 @@ def create_app(
     )
     app.state.retriever = None
     app.state.chat_client = None
-    app.state.toolkit_session = None
+    app.state.toolkit = None
 
     @app.exception_handler(RequestValidationError)
     async def invalid_request(

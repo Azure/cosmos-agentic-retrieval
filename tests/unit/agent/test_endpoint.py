@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import time
+from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, Mock
 
 import anyio
@@ -19,6 +20,7 @@ from cosmos_agentic_retriever.agent import chat_client
 from cosmos_agentic_retriever.agent.chat_client import ChatClient
 from cosmos_agentic_retriever.agent.loop import LlmTurn, TokenUsage
 from cosmos_agentic_retriever.agent.tool_contracts import ToolCall
+from cosmos_agentic_retriever.agent.toolkit_client import ToolkitClient
 from cosmos_agentic_retriever.config import RetrieverConfig
 from cosmos_agentic_retriever.orchestration import (
     ContainerItem,
@@ -222,7 +224,7 @@ def test_chat_client_signs_in_with_key_or_entra(monkeypatch, api_key):
     assert identity.closed is (api_key is None)
 
 
-def test_toolkit_sign_in_uses_the_toolkit_app_and_one_credential(monkeypatch):
+def test_toolkit_client_signs_in_with_the_toolkit_app_and_one_credential(monkeypatch):
     created: list[_FakeIdentity] = []
 
     def new_identity() -> _FakeIdentity:
@@ -230,23 +232,31 @@ def test_toolkit_sign_in_uses_the_toolkit_app_and_one_credential(monkeypatch):
         return created[-1]
 
     monkeypatch.setattr(server, "AsyncDefaultAzureCredential", new_identity)
-    sessions: list[tuple[str, object]] = []
-    monkeypatch.setattr(
-        server, "signed_in_session", lambda url, get_token: sessions.append((url, get_token))
-    )
+    opened: list[tuple[str, object]] = []
+    closed: list[bool] = []
 
-    with TestClient(_app(_settings(llm_api_key=None, toolkit_app_id="app-123"))):
-        [(url, get_token)] = sessions
+    @asynccontextmanager
+    async def fake_sessions(url, get_token):
+        opened.append((url, get_token))
+        yield "session factory"
+        closed.append(True)
+
+    monkeypatch.setattr(server, "toolkit_sessions", fake_sessions)
+
+    with TestClient(_app(_settings(llm_api_key=None, toolkit_app_id="app-123"))) as http:
+        assert isinstance(http.app.state.toolkit, ToolkitClient)
+        [(url, get_token)] = opened
         assert url == "http://127.0.0.1:8080/mcp"
         assert anyio.run(get_token) == "entra-token"
         assert created[0].scopes == ("api://app-123/.default",)
 
+    assert closed == [True]
     assert len(created) == 1 and created[0].closed
 
 
-def test_toolkit_sign_in_is_off_without_toolkit_app_id():
+def test_toolkit_client_is_off_without_toolkit_app_id():
     with TestClient(_app(_settings())) as http:
-        assert http.app.state.toolkit_session is None
+        assert http.app.state.toolkit is None
 
 
 @pytest.mark.parametrize("container", [None, "C"])
