@@ -51,9 +51,13 @@ from tqdm import tqdm
 from cosmos_agentic_retriever.config import RetrieverConfig
 from cosmos_agentic_retriever.server import create_app
 from dataset_contracts import Question
+from dataset_enterprise_rag_bench import EnterpriseRAGBenchCollection
 from dataset_hipporag2 import HippoRAG2Collection
 
-COLLECTIONS = {"hipporag2": HippoRAG2Collection}
+COLLECTIONS = {
+    "enterprise-rag-bench": EnterpriseRAGBenchCollection,
+    "hipporag2": HippoRAG2Collection,
+}
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RUNS_DIR = REPO_ROOT / ".live-data" / "benchmark-runs"
 AGENT_TOKEN_FIELDS = ("prompt_tokens", "completion_tokens", "cached_prompt_tokens", "reasoning_tokens")

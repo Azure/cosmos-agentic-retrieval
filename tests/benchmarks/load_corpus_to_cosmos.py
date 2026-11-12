@@ -31,9 +31,13 @@ from openai import OpenAI
 from tqdm import tqdm
 
 from dataset_contracts import Passage
+from dataset_enterprise_rag_bench import EnterpriseRAGBenchCollection
 from dataset_hipporag2 import HippoRAG2Collection
 
-COLLECTIONS = {"hipporag2": HippoRAG2Collection}
+COLLECTIONS = {
+    "enterprise-rag-bench": EnterpriseRAGBenchCollection,
+    "hipporag2": HippoRAG2Collection,
+}
 TEXT_PATHS = ("/title", "/text")
 # Entra token audience for Azure OpenAI and Azure AI Foundry endpoints.
 TOKEN_SCOPE = "https://cognitiveservices.azure.com/.default"
