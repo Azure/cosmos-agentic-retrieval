@@ -139,6 +139,7 @@ def main() -> None:
     args = parser.parse_args()
 
     collection = COLLECTIONS[args.collection]()
+    print(f"Reading the {collection.name} corpus")
     documents = collection.read_merged_corpus_documents()
     if args.document_ids_file:
         wanted = {line.strip() for line in args.document_ids_file.read_text().splitlines() if line.strip()}
