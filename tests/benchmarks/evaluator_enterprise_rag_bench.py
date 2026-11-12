@@ -7,7 +7,10 @@ comparable with the ERB leaderboard. Documents are the ones the response
 returned, not the ones its answer cites.
 
 The two judge prompts are copied from ERB's src/prompts/answer_evaluation.py at
-commit d36685e, under this notice:
+commit d36685e. The fact prompt also shows the question, with an instruction to
+use it only to resolve what the answer refers to; without it, short correct
+answers such as "Marcus Chen volunteered to be captain" were judged to miss
+facts that name the context, such as the team. ERB's code is under this notice:
 
     MIT License
     Copyright (c) 2026 DanswerAI, Inc.
@@ -81,6 +84,12 @@ The answer may contain more details or richer information than the statement but
 If there are negative statements such as "The answer must not say...", it is valid if the answer mentions the statement with caveats or qualifications. \
 It is valid if additional context is shared for completeness however hallucinations are not allowed. \
 Output a simple yes or no for if the answer is consistent with and contains the information in the statement.
+Use the question only to understand what the answer refers to. The information in the statement must come from the answer; do not credit information that appears only in the question.
+
+## Question
+```
+{question}
+```
 
 ## Answer
 ```
@@ -112,7 +121,10 @@ class ERBEvaluator(Evaluator[ERBQuestion]):
         details = {}
         if response.answer:
             correct, details["correctness_reason"] = self.judge_correctness(question, response.answer, judge_tokens)
-            supported = sum(self.judge_fact(response.answer, fact, judge_tokens) for fact in question.answer_facts)
+            supported = sum(
+                self.judge_fact(question.question, response.answer, fact, judge_tokens)
+                for fact in question.answer_facts
+            )
             completeness = supported / len(question.answer_facts) if question.answer_facts else 1.0
         else:
             correct, completeness = False, 0.0
@@ -166,9 +178,10 @@ class ERBEvaluator(Evaluator[ERBQuestion]):
             f"correctness reply was not the expected JSON after {CORRECTNESS_ATTEMPTS} tries: {reply[:200]!r}"
         )
 
-    def judge_fact(self, answer: str, fact: str, judge_tokens: dict[str, int | None]) -> bool:
+    def judge_fact(self, question: str, answer: str, fact: str, judge_tokens: dict[str, int | None]) -> bool:
         """Ask whether the answer contains one of the facts a complete answer states."""
-        reply = self.ask_judge(INDIVIDUAL_FACT_VALIDATOR_PROMPT.format(answer=answer, statement=fact), judge_tokens)
+        prompt = INDIVIDUAL_FACT_VALIDATOR_PROMPT.format(question=question, answer=answer, statement=fact)
+        reply = self.ask_judge(prompt, judge_tokens)
         first_line = reply.strip().splitlines()[0] if reply.strip() else ""
         return bool(YES.search(first_line))
 
