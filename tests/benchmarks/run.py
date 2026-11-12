@@ -82,15 +82,15 @@ SearchFn = Callable[[str], dict[str, Any]]
 def sample_questions_per_dataset(
     questions: list[Question], per_dataset: int | None, seed: int
 ) -> list[Question]:
-    """Pick the same random questions from each dataset for a given seed; None keeps all."""
+    """Pick the same random questions from each dataset, or each category of a dataset, for a given seed; None keeps all."""
     if per_dataset is None:
         return questions
-    by_dataset: dict[str, list[Question]] = {}
+    by_group: dict[tuple[str, str | None], list[Question]] = {}
     for question in questions:
-        by_dataset.setdefault(question.dataset, []).append(question)
+        by_group.setdefault((question.dataset, getattr(question, "category", None)), []).append(question)
     rng = random.Random(seed)
     return [
-        q for qs in by_dataset.values() for q in rng.sample(qs, min(per_dataset, len(qs)))
+        q for qs in by_group.values() for q in rng.sample(qs, min(per_dataset, len(qs)))
     ]
 
 
@@ -294,7 +294,7 @@ def main() -> None:
     parser.add_argument("--container", help="Cosmos container holding the collection's corpus")
     parser.add_argument("--account-uri", help="Cosmos DB account URI, to run the service in this process")
     parser.add_argument("--database", help=f"database holding the container (default: {DEFAULTS['database']})")
-    parser.add_argument("--questions-per-dataset", type=int, help="questions sampled from each dataset (default: all)")
+    parser.add_argument("--questions-per-dataset", type=int, help="questions sampled from each dataset, or from each category of datasets with categories (default: all)")
     parser.add_argument("--seed", type=int, help=f"random seed for sampling questions (default: {DEFAULTS['seed']})")
     parser.add_argument("--toolkit-url", help="a deployed MCP toolkit's /mcp URL, to run through the toolkit instead")
     parser.add_argument("--toolkit-app-id", help="client ID of the toolkit's Entra app, used to sign in to the toolkit")
