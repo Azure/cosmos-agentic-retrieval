@@ -6,7 +6,7 @@ To score a collection, subclass `Evaluator` and register it in evaluate.py.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Generic, TypeVar
 
 from openai import OpenAI
@@ -22,6 +22,8 @@ class ReturnedDocument:
 
     id: str
     fields: dict[str, str]
+    # The document a chunk belongs to, when the container stores documents as chunks.
+    parent_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -37,7 +39,7 @@ class AgentResponse:
         return cls(
             answer=body.get("answer") or "",
             documents=[
-                ReturnedDocument(d["item_id"], d.get("text_fields", {}))
+                ReturnedDocument(d["item_id"], d.get("text_fields", {}), d.get("parent_document_id"))
                 for d in body.get("documents", [])
             ],
         )
@@ -49,6 +51,8 @@ class EvaluationResult:
 
     scores: dict[str, float | None]
     judge_tokens: dict[str, int | None]
+    # Text to read alongside the scores, e.g. the judge's reason for a verdict.
+    details: dict[str, str] = field(default_factory=dict)
 
 
 class Judge:

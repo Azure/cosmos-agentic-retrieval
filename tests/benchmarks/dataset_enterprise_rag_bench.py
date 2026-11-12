@@ -61,7 +61,8 @@ class ERBDocument(Document):
 class ERBQuestion(Question):
     """A question with its reference answer, the facts a complete answer states, and its supporting documents."""
 
-    question_type: str
+    # ERB's question_type, e.g. "basic" or "info_not_found"; evaluate.py reports scores per category.
+    category: str
     source_types: tuple[str, ...]
     expected_doc_ids: tuple[str, ...]
     gold_answer: str
@@ -101,7 +102,7 @@ class EnterpriseRAGBench(HFBenchmarkDataset):
                 id=r["question_id"],
                 dataset=self.name,
                 question=r["question"],
-                question_type=r["question_type"],
+                category=r["question_type"],
                 source_types=tuple(r["source_types"]),
                 expected_doc_ids=tuple(r["expected_doc_ids"]),
                 gold_answer=r["gold_answer"],
@@ -114,6 +115,11 @@ class EnterpriseRAGBench(HFBenchmarkDataset):
 class EnterpriseRAGBenchCollection(BenchmarkCollection):
     name = "enterprise-rag-bench"
     datasets = (EnterpriseRAGBench(),)
+    # Tells the service which ERBPassage fields link a chunk to its document.
+    chunk_schema: ClassVar[dict[str, str]] = {
+        "parent_document_id_path": "/doc_id",
+        "chunk_order_path": "/chunk_idx",
+    }
 
 
 if __name__ == "__main__":

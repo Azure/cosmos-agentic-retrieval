@@ -6,8 +6,9 @@ judge model comes from LLM_BASE_URL, LLM_MODEL and LLM_API_KEY; without
 LLM_API_KEY, it is called with an Entra token from `az login`.
 
 Writes one JSON file with the evaluation settings, the mean of each score per
-dataset (over the questions where the score applies), and each question's
-scores. A question whose evaluation fails is recorded and the rest continue.
+dataset (over the questions where the score applies), also per category for
+questions that have one, and each question's scores. A question whose
+evaluation fails is recorded with the reason, and the rest continue.
 
 Example:
     python tests/benchmarks/evaluate.py .live-data/benchmark-runs/<run>.json
@@ -29,19 +30,31 @@ from tqdm import tqdm
 
 from cosmos_agentic_retriever.server import LLM_TOKEN_SCOPE
 from dataset_contracts import Question
+from dataset_enterprise_rag_bench import EnterpriseRAGBenchCollection
 from dataset_hipporag2 import HippoRAG2Collection
 from evaluation_contracts import AgentResponse, Evaluator, Judge
+from evaluator_enterprise_rag_bench import ERBEvaluator
 from evaluator_hipporag2 import HippoRAGEvaluator
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-COLLECTIONS = {"hipporag2": HippoRAG2Collection}
+COLLECTIONS = {
+    "enterprise-rag-bench": EnterpriseRAGBenchCollection,
+    "hipporag2": HippoRAG2Collection,
+}
 # Each collection's default evaluator; --evaluator picks another.
-EVALUATORS = {"hipporag2": HippoRAGEvaluator}
+EVALUATORS = {"enterprise-rag-bench": ERBEvaluator, "hipporag2": HippoRAGEvaluator}
+
+
+def read_category(question: Question | None) -> str | None:
+    """The question's category, e.g. ERB's question type, for datasets whose questions have one."""
+    return getattr(question, "category", None)
 
 
 def evaluate_record(evaluator: Evaluator, question: Question, record: dict[str, Any]) -> dict[str, Any]:
     """Score one answered question, recording any failure instead of raising."""
     result: dict[str, Any] = {"dataset": record["dataset"], "question_id": record["question_id"]}
+    if read_category(question) is not None:
+        result["category"] = read_category(question)
     try:
         evaluation = evaluator.evaluate(question, AgentResponse.from_response_body(record["response"]))
     except Exception as exc:
@@ -52,6 +65,7 @@ def evaluate_record(evaluator: Evaluator, question: Question, record: dict[str, 
         "error": None,
         "scores": evaluation.scores,
         "judge_tokens": evaluation.judge_tokens,
+        "details": evaluation.details,
     }
 
 
@@ -80,9 +94,13 @@ def summarize_results(results: list[dict[str, Any]], questions_in_run: int) -> d
 
 
 def write_scores_file(
-    path: Path, metadata: dict[str, Any], run_records: list[dict[str, Any]], results: list[dict[str, Any]]
+    path: Path,
+    metadata: dict[str, Any],
+    run_records: list[dict[str, Any]],
+    questions: dict[tuple[str, str], Question],
+    results: list[dict[str, Any]],
 ) -> None:
-    """Write the evaluation's settings, per-dataset summary and results, replacing the file at once."""
+    """Write the evaluation's settings, per-dataset and per-category summaries and results, replacing the file at once."""
     results = sorted(results, key=lambda r: (r["dataset"], r["question_id"]))
     datasets = sorted({r["dataset"] for r in run_records})
     summary = {
@@ -93,25 +111,43 @@ def write_scores_file(
         for dataset in datasets
     }
     summary["all"] = summarize_results(results, len(run_records))
+    run_categories = [read_category(questions.get((r["dataset"], r["question_id"]))) for r in run_records]
+    summary_by_category = {
+        category: summarize_results(
+            [r for r in results if r.get("category") == category],
+            run_categories.count(category),
+        )
+        for category in sorted({c for c in run_categories if c is not None})
+    }
     path.parent.mkdir(parents=True, exist_ok=True)
     partial_path = path.with_suffix(".partial")
-    partial_path.write_text(
-        json.dumps({"metadata": metadata, "summary": summary, "results": results}, indent=2)
-    )
+    contents = {"metadata": metadata, "summary": summary}
+    if summary_by_category:
+        contents["summary_by_category"] = summary_by_category
+    partial_path.write_text(json.dumps({**contents, "results": results}, indent=2))
     partial_path.replace(path)
 
 
-def print_summary(path: Path) -> None:
-    """Print each dataset's evaluated count and mean scores."""
-    summary = json.loads(path.read_text())["summary"]
+def print_summary_table(heading: str, summary: dict[str, Any]) -> None:
+    """Print one row per group with its evaluated count and mean scores."""
     names = list(dict.fromkeys(name for values in summary.values() for name in values["scores"]))
-    print(f"{'dataset':<18}{'evaluated':>11}" + "".join(f"{n:>20}" for n in names))
-    for dataset, values in summary.items():
+    widths = [max(len(n), 6) + 2 for n in names]
+    print(f"{heading:<26}{'evaluated':>11}" + "".join(f"{n:>{w}}" for n, w in zip(names, widths)))
+    for group, values in summary.items():
         means = [values["scores"].get(n, {}).get("mean") for n in names]
         print(
-            f"{dataset:<18}{values['evaluated']:>5}/{values['questions_in_run']:<5}"
-            + "".join(f"{m:>20.3f}" if m is not None else f"{'-':>20}" for m in means)
+            f"{group:<26}{values['evaluated']:>5}/{values['questions_in_run']:<5}"
+            + "".join(f"{m:>{w}.3f}" if m is not None else f"{'-':>{w}}" for m, w in zip(means, widths))
         )
+
+
+def print_summary(path: Path) -> None:
+    """Print each dataset's, and each category's, evaluated count and mean scores."""
+    contents = json.loads(path.read_text())
+    print_summary_table("dataset", contents["summary"])
+    if "summary_by_category" in contents:
+        print()
+        print_summary_table("category", contents["summary_by_category"])
     print(f"Scores: {path}")
 
 
@@ -180,7 +216,7 @@ def main() -> None:
     finally:
         pool.shutdown(wait=False, cancel_futures=True)
         metadata["finished_at"] = datetime.now(timezone.utc).isoformat()
-        write_scores_file(output, metadata, run["results"], results)
+        write_scores_file(output, metadata, run["results"], questions, results)
         print_summary(output)
 
 

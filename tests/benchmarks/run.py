@@ -106,6 +106,8 @@ def start_in_process_search(stack: ExitStack, settings: dict[str, Any]) -> Searc
                     "item_id_path": "/id",
                     "partition_key_paths": ["/id"],
                     "text_paths": ["/title", "/text"],
+                    # Collections stored as chunks define which fields link a chunk to its document.
+                    **getattr(COLLECTIONS[settings["collection"]], "chunk_schema", {}),
                 },
                 "search_text_fields": ["/title", "/text"],
             }

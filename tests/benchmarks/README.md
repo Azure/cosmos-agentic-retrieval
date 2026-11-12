@@ -1,9 +1,12 @@
 # Benchmarks
 
-Measures agentic search on the
-[HippoRAG 2](https://huggingface.co/datasets/osunlp/HippoRAG_2) collection: 1,000
-questions each from 2WikiMultihopQA, HotpotQA, MuSiQue, Natural Questions and
-PopQA, over one shared corpus of 45,881 passages. 
+Measures agentic search on two collections:
+- [HippoRAG 2](https://huggingface.co/datasets/osunlp/HippoRAG_2): 1,000
+  questions each from 2WikiMultihopQA, HotpotQA, MuSiQue, Natural Questions and
+  PopQA, over one shared corpus of 45,881 passages.
+- [EnterpriseRAG-Bench](https://huggingface.co/datasets/onyx-dot-app/EnterpriseRAG-Bench)
+  (ERB): 500 questions in 10 categories over 511,962 internal documents of a
+  simulated company, from tools such as Slack, Gmail, Jira and Confluence.
 
 ## Setup
 
@@ -25,6 +28,13 @@ python tests/benchmarks/load_corpus_to_cosmos.py --subscription <id> \
 To load part of a corpus, pass `--document-ids-file` with one document ID per
 line. Running again with a longer list, or without one, adds the remaining
 documents; passages already in the container are skipped.
+
+ERB documents are long, so each is stored as chunks of up to 512 tokens with
+128 tokens of overlap (`ERBDocument.CHUNK_MAX_TOKENS` and
+`CHUNK_OVERLAP_TOKENS`); the whole corpus is about 1.73M chunks. Each chunk
+keeps its document's ERB `doc_id`. The items don't record the chunk settings,
+so name the container after them, e.g. `--collection enterprise-rag-bench
+--container enterprise-rag-bench-c512-o128`.
 
 ## Run
 
@@ -54,7 +64,9 @@ python tests/benchmarks/run.py --account-uri https://<account>.documents.azure.c
 tool, signed in with your `az login`. The agent runs in the deployed retriever
 with that deployment's own configuration (model, turn limit and containers);
 the model variables are not used. The retriever must be configured to search
-the corpus container:
+the corpus container; for ERB, its schema must also set
+`parent_document_id_path: /doc_id` and `chunk_order_path: /chunk_idx`, which
+`run.py` sets for in-process runs:
 
 ```bash
 python tests/benchmarks/run.py --toolkit-url https://<toolkit-app>/mcp \
@@ -86,3 +98,21 @@ The HippoRAG 2 evaluator reports:
   the returned documents.
 - **Exact match** and **F1**: standard SQuAD-style word matching. The agent
   answers in sentences, so these understate correct answers.
+
+The ERB evaluator follows ERB's metrics-based evaluation, with its prompts,
+and reports each score per category too:
+- **correct**: the judge decides whether the answer is aligned with the
+  reference answer.
+- **completeness**: share of the question's answer facts the judge finds in
+  the answer.
+- **overall**: completeness when correct, otherwise 0; ERB's headline score.
+- **returned_document_recall**: share of the question's gold documents among
+  the returned chunks' documents. Not scored for the 30 questions without gold
+  documents.
+- **returned_invalid_extra_documents**: number of returned documents that are
+  not gold.
+
+The scores come from our own evaluator and judge model, without ERB's step
+that corrects gold documents and answers, and use every returned document
+rather than the ones the answer cites. They are not comparable with the ERB
+leaderboard.
