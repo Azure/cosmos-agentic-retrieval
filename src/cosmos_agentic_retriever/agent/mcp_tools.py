@@ -9,12 +9,13 @@ Tools named in ``exclude`` are not offered. By default that is ``agentic_search`
 so the agent cannot call the service it runs in.
 
 `streamable_http_session` opens a session to a server over streamable HTTP, such
-as the MCP toolkit. Tests pass a factory for an in-memory session instead.
+as the MCP toolkit. `signed_in_session` wraps it so each session signs in with a
+fresh bearer token. Tests pass a factory for an in-memory session instead.
 """
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 
 import httpx
@@ -40,6 +41,18 @@ async def streamable_http_session(
     ):
         await session.initialize()
         yield session
+
+
+def signed_in_session(url: str, get_token: Callable[[], Awaitable[str]]) -> SessionFactory:
+    """A session factory for ``url`` that sends a fresh bearer token with each session."""
+
+    @asynccontextmanager
+    async def open_session() -> AsyncIterator[ClientSession]:
+        headers = {"Authorization": f"Bearer {await get_token()}"}
+        async with streamable_http_session(url, headers=headers) as session:
+            yield session
+
+    return open_session
 
 
 async def _list_all_tools(session: ClientSession) -> list[types.Tool]:

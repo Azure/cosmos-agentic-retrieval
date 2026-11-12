@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+
 import anyio
 import pytest
 from mcp.server.fastmcp import FastMCP
 from mcp.shared.memory import create_connected_server_and_client_session
 
-from cosmos_agentic_retriever.agent.mcp_tools import open_mcp_tools
+from cosmos_agentic_retriever.agent import mcp_tools
+from cosmos_agentic_retriever.agent.mcp_tools import open_mcp_tools, signed_in_session
 from cosmos_agentic_retriever.agent.tool_contracts import ToolCall, execute_tool_call
 
 pytestmark = pytest.mark.anyio
@@ -97,3 +100,30 @@ async def test_tools_fail_after_the_session_closes():
 
     assert result.content == ""
     assert result.error
+
+
+async def test_signed_in_session_sends_a_fresh_token_per_session(monkeypatch):
+    opened: list[tuple[str, dict]] = []
+
+    @asynccontextmanager
+    async def fake_session(url, *, headers):
+        opened.append((url, headers))
+        yield "session"
+
+    monkeypatch.setattr(mcp_tools, "streamable_http_session", fake_session)
+    tokens = iter(["token-1", "token-2"])
+
+    async def get_token() -> str:
+        return next(tokens)
+
+    open_session = signed_in_session("http://127.0.0.1:8080/mcp", get_token)
+    async with open_session() as first:
+        pass
+    async with open_session():
+        pass
+
+    assert first == "session"
+    assert opened == [
+        ("http://127.0.0.1:8080/mcp", {"Authorization": "Bearer token-1"}),
+        ("http://127.0.0.1:8080/mcp", {"Authorization": "Bearer token-2"}),
+    ]

@@ -48,8 +48,9 @@ cosmos_containers:
       text_paths: ["/YOUR-TEXT-FIELD"]
 ```
 
-The service signs in to Cosmos DB and the model with the app's managed identity.
-It is built into the service's image; the script refuses a file with
+The service accesses Cosmos DB, the retreival model and the toolkit with the
+app's managed identity.  It is built into the service's image; the script
+refuses a file with
 `cosmos_key` or `llm_api_key`.
 
 ### Step 3: Add the service to the toolkit app
@@ -64,9 +65,11 @@ hosts the model:
 ```
 
 The script builds the service image with the configuration inside, pushes it to
-the toolkit's registry, lets the app's managed identity call the model, and adds
-the service as a second container in the app. On networks that block PyPI, add
-`-PipIndexUrl <mirror>` to install packages from a mirror.
+the toolkit's registry, lets the app's managed identity call the model and the
+toolkit's MCP tools, and adds the service as a second container in the app.
+Run it as an owner of the toolkit's Entra app; whoever deployed the toolkit is
+one. On networks that block PyPI, add `-PipIndexUrl <mirror>` to install
+packages from a mirror.
 
 ### Step 4: Try it
 

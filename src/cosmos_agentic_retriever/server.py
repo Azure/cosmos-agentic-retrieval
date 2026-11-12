@@ -39,6 +39,7 @@ from cosmos_agentic_retriever.agent import (
     make_full_text_search_tool,
     run_agent_search,
 )
+from cosmos_agentic_retriever.agent.mcp_tools import signed_in_session
 from cosmos_agentic_retriever.agent.prompts import SYSTEM_PROMPT
 from cosmos_agentic_retriever.config import RetrieverConfig, get_config
 from cosmos_agentic_retriever.orchestration import (
@@ -61,6 +62,11 @@ from cosmos_agentic_retriever.query_engine.types import (
 
 # Entra token audience for Azure OpenAI and Azure AI Foundry model endpoints.
 LLM_TOKEN_SCOPE = "https://cognitiveservices.azure.com/.default"
+
+
+def toolkit_token_scope(app_id: str) -> str:
+    """Entra scope for tokens to the MCP toolkit whose Entra app has this client ID."""
+    return f"api://{app_id}/.default"
 
 
 class SearchRequest(BaseModel):
@@ -129,7 +135,16 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         resources = ExitStack()
-        model_resources = AsyncExitStack()
+        async_resources = AsyncExitStack()
+        identity: AsyncDefaultAzureCredential | None = None
+
+        def azure_identity() -> AsyncDefaultAzureCredential:
+            """The app's Azure credential, created once when first needed."""
+            nonlocal identity
+            if identity is None:
+                identity = AsyncDefaultAzureCredential()
+                async_resources.push_async_callback(identity.close)
+            return identity
 
         def build_retrievers() -> dict[str, CorpusRetriever]:
             credential: str | AzureCliCredential | DefaultAzureCredential
@@ -173,23 +188,29 @@ def create_app(
             if resolved.llm_api_key is not None:
                 llm_auth = resolved.llm_api_key.get_secret_value()
             else:
-                identity = AsyncDefaultAzureCredential()
-                model_resources.push_async_callback(identity.close)
-                llm_auth = get_bearer_token_provider(identity, LLM_TOKEN_SCOPE)
+                llm_auth = get_bearer_token_provider(azure_identity(), LLM_TOKEN_SCOPE)
             chat_client = ChatClient(
                 base_url=str(resolved.llm_base_url),
                 model=resolved.llm_model,
                 api_key=llm_auth,
                 params=dict(resolved.llm_params),
             )
-            model_resources.push_async_callback(chat_client.close)
+            async_resources.push_async_callback(chat_client.close)
             app.state.chat_client = chat_client
+            if resolved.toolkit_app_id is not None:
+                app.state.toolkit_session = signed_in_session(
+                    str(resolved.toolkit_mcp_url),
+                    get_bearer_token_provider(
+                        azure_identity(), toolkit_token_scope(resolved.toolkit_app_id)
+                    ),
+                )
             yield
         finally:
             app.state.retriever = None
             app.state.chat_client = None
+            app.state.toolkit_session = None
             with anyio.CancelScope(shield=True):
-                await model_resources.aclose()
+                await async_resources.aclose()
                 await anyio.to_thread.run_sync(resources.close)
 
     app = FastAPI(
@@ -200,6 +221,7 @@ def create_app(
     )
     app.state.retriever = None
     app.state.chat_client = None
+    app.state.toolkit_session = None
 
     @app.exception_handler(RequestValidationError)
     async def invalid_request(

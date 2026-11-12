@@ -222,6 +222,33 @@ def test_chat_client_signs_in_with_key_or_entra(monkeypatch, api_key):
     assert identity.closed is (api_key is None)
 
 
+def test_toolkit_sign_in_uses_the_toolkit_app_and_one_credential(monkeypatch):
+    created: list[_FakeIdentity] = []
+
+    def new_identity() -> _FakeIdentity:
+        created.append(_FakeIdentity())
+        return created[-1]
+
+    monkeypatch.setattr(server, "AsyncDefaultAzureCredential", new_identity)
+    sessions: list[tuple[str, object]] = []
+    monkeypatch.setattr(
+        server, "signed_in_session", lambda url, get_token: sessions.append((url, get_token))
+    )
+
+    with TestClient(_app(_settings(llm_api_key=None, toolkit_app_id="app-123"))):
+        [(url, get_token)] = sessions
+        assert url == "http://127.0.0.1:8080/mcp"
+        assert anyio.run(get_token) == "entra-token"
+        assert created[0].scopes == ("api://app-123/.default",)
+
+    assert len(created) == 1 and created[0].closed
+
+
+def test_toolkit_sign_in_is_off_without_toolkit_app_id():
+    with TestClient(_app(_settings())) as http:
+        assert http.app.state.toolkit_session is None
+
+
 @pytest.mark.parametrize("container", [None, "C"])
 @pytest.mark.parametrize("limit, service_cap", [(1, 10), (50, 1), (8, 10)])
 def test_mcp_request_runs_agent_with_scope_filters_and_result_limit(
