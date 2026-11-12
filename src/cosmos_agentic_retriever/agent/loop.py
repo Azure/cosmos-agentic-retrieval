@@ -14,7 +14,7 @@ the contract in tool_contracts.py.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, fields
 from typing import Any
 
@@ -92,19 +92,19 @@ def _observation(response: ToolCallResponse) -> str:
     return response.content if response.error is None else f"Error: {response.error}"
 
 
-def _respond(
+async def _respond(
     tools_by_name: dict[str, Tool], call: ToolCall | InvalidToolCall
 ) -> ToolCallResponse:
     """Run a valid call; answer an unparseable one with its parsing error."""
     if isinstance(call, InvalidToolCall):
         return ToolCallResponse(call_id=call.id, content="", error=call.error)
-    return execute_tool_call(tools_by_name, call)
+    return await execute_tool_call(tools_by_name, call)
 
 
-def run_agent_search(
+async def run_agent_search(
     question: str,
     *,
-    complete: Callable[[list[dict[str, Any]], list[Tool]], LlmTurn],
+    complete: Callable[[list[dict[str, Any]], list[Tool]], Awaitable[LlmTurn]],
     tools: list[Tool],
     system_prompt: str,
     max_turns: int,
@@ -114,7 +114,7 @@ def run_agent_search(
     Args:
         question: the caller's request; the model decides what to search for.
         complete: gets the model's next reply as an LlmTurn. The service passes
-            ChatClient.complete; tests can supply a scripted callable.
+            ChatClient.complete; tests can supply a scripted coroutine.
         tools: the capabilities offered to the model (the `full_text_search`
             tool). Names must be unique.
         system_prompt: the instruction that opens the transcript.
@@ -142,7 +142,7 @@ def run_agent_search(
     tool_calls: dict[str, int] = {}
     tool_responses: list[ToolCallResponse] = []
     for turn in range(1, max_turns + 1):
-        reply = complete(messages, tools)
+        reply = await complete(messages, tools)
         messages.append(reply.message)
         usage += reply.usage
         if reply.error is not None:
@@ -153,7 +153,7 @@ def run_agent_search(
             break
         for call in reply.tool_calls:
             tool_calls[call.name] = tool_calls.get(call.name, 0) + 1
-            response = _respond(tools_by_name, call)
+            response = await _respond(tools_by_name, call)
             if response.error is not None:
                 _logger.warning("tool_call_failed", tool=call.name, error=response.error)
             tool_responses.append(response)

@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import pytest
+
 from cosmos_agentic_retriever.agent.search_tool import make_full_text_search_tool
 from cosmos_agentic_retriever.orchestration import ContainerItem, MultiSearchResult
+
+pytestmark = pytest.mark.anyio
 
 
 def _result(*items: ContainerItem) -> MultiSearchResult:
@@ -20,19 +24,19 @@ def _item(item_id: str, text: str, retrieval_id: str) -> ContainerItem:
     )
 
 
-def test_missing_query_returns_error():
+async def test_missing_query_returns_error():
     tool = make_full_text_search_tool(lambda q, n: _result())
-    assert tool().content.startswith("Error:")
-    assert tool(query="  ").content.startswith("Error:")
+    assert (await tool()).content.startswith("Error:")
+    assert (await tool(query="  ")).content.startswith("Error:")
 
 
-def test_non_integer_max_documents_returns_error():
+async def test_non_integer_max_documents_returns_error():
     tool = make_full_text_search_tool(lambda q, n: _result())
-    assert "integer" in tool(query="x", max_documents="5").content
-    assert "integer" in tool(query="x", max_documents=True).content
+    assert "integer" in (await tool(query="x", max_documents="5")).content
+    assert "integer" in (await tool(query="x", max_documents=True)).content
 
 
-def test_max_documents_is_clamped_to_cap():
+async def test_max_documents_is_clamped_to_cap():
     seen: list[int] = []
 
     def search(query: str, count: int) -> MultiSearchResult:
@@ -40,33 +44,33 @@ def test_max_documents_is_clamped_to_cap():
         return _result()
 
     tool = make_full_text_search_tool(search, max_documents_cap=20)
-    tool.handler([{"query": "x", "max_documents": 100}, {"query": "x", "max_documents": 0}])
+    await tool.handler([{"query": "x", "max_documents": 100}, {"query": "x", "max_documents": 0}])
     assert seen == [20, 1]
 
 
-def test_default_count_used_when_omitted():
+async def test_default_count_used_when_omitted():
     seen: list[int] = []
 
     def search(query: str, count: int) -> MultiSearchResult:
         seen.append(count)
         return _result()
 
-    make_full_text_search_tool(search, default_max_documents=7)(query="x")
+    await make_full_text_search_tool(search, default_max_documents=7)(query="x")
     assert seen == [7]
 
 
-def test_formats_items_with_retrieval_id_and_text():
+async def test_formats_items_with_retrieval_id_and_text():
     tool = make_full_text_search_tool(
         lambda q, n: _result(
             _item("a1", "the answer is 42", "D/A:k1"),
             _item("a2", "more context", "D/A:k2"),
         )
     )
-    text = tool(query="x").content
+    text = (await tool(query="x")).content
     assert "[D/A:k1]" in text and "the answer is 42" in text
     assert "[D/A:k2]" in text and "more context" in text
 
 
-def test_empty_results_message():
+async def test_empty_results_message():
     tool = make_full_text_search_tool(lambda q, n: _result())
-    assert "No results" in tool(query="x").content
+    assert "No results" in (await tool(query="x")).content

@@ -1,10 +1,9 @@
 """Offer an MCP server's tools to the agent as `Tool`s.
 
-The agent loop is synchronous and the MCP client is async, so `open_mcp_tools`
-runs one MCP session on a background event loop (an anyio blocking portal) and
-returns one `Tool` per server tool. Each tool's handler sends its calls over that
-session and turns the reply into a `ToolExecutionResult`. The session stays open
-until the context exits, so one agent run uses one session.
+`open_mcp_tools` opens one MCP session and yields one `Tool` per server tool.
+Each tool's handler sends its calls over that session and turns the reply into a
+`ToolExecutionResult`. The session stays open until the context exits, so one
+agent run uses one session.
 
 Tools named in ``exclude`` are not offered. By default that is ``agentic_search``,
 so the agent cannot call the service it runs in.
@@ -15,11 +14,10 @@ as the MCP toolkit. Tests pass a factory for an in-memory session instead.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Callable, Iterator, Mapping
-from contextlib import AbstractAsyncContextManager, asynccontextmanager, contextmanager
+from collections.abc import AsyncIterator, Callable, Mapping
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 
 import httpx
-from anyio.from_thread import BlockingPortal, start_blocking_portal
 from mcp import ClientSession, types
 from mcp.client.streamable_http import streamable_http_client
 
@@ -68,13 +66,12 @@ def _to_result(reply: types.CallToolResult) -> ToolExecutionResult:
     return ToolExecutionResult(content=text)
 
 
-def _to_tool(portal: BlockingPortal, session: ClientSession, spec: types.Tool) -> Tool:
+def _to_tool(session: ClientSession, spec: types.Tool) -> Tool:
     """Wrap one server tool; its handler calls the server once per call, in order."""
 
-    def handler(calls: list[dict]) -> list[ToolExecutionResult]:
+    async def handler(calls: list[dict]) -> list[ToolExecutionResult]:
         return [
-            _to_result(portal.call(session.call_tool, spec.name, arguments))
-            for arguments in calls
+            _to_result(await session.call_tool(spec.name, arguments)) for arguments in calls
         ]
 
     return Tool(
@@ -85,21 +82,18 @@ def _to_tool(portal: BlockingPortal, session: ClientSession, spec: types.Tool) -
     )
 
 
-@contextmanager
-def open_mcp_tools(
+@asynccontextmanager
+async def open_mcp_tools(
     open_session: SessionFactory,
     *,
     exclude: frozenset[str] = DEFAULT_EXCLUDED_TOOLS,
-) -> Iterator[list[Tool]]:
+) -> AsyncIterator[list[Tool]]:
     """Open an MCP session and yield its tools, except those in ``exclude``.
 
     ``open_session`` returns an async context manager yielding an initialized
     session, such as ``lambda: streamable_http_session(url, headers=...)``. The
     tools work only inside this context; the session closes when it exits.
     """
-    with (
-        start_blocking_portal() as portal,
-        portal.wrap_async_context_manager(open_session()) as session,
-    ):
-        specs = portal.call(_list_all_tools, session)
-        yield [_to_tool(portal, session, spec) for spec in specs if spec.name not in exclude]
+    async with open_session() as session:
+        specs = await _list_all_tools(session)
+        yield [_to_tool(session, spec) for spec in specs if spec.name not in exclude]

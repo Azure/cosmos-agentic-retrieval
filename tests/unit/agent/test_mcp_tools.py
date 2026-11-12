@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import anyio
 import pytest
 from mcp.server.fastmcp import FastMCP
 from mcp.shared.memory import create_connected_server_and_client_session
 
 from cosmos_agentic_retriever.agent.mcp_tools import open_mcp_tools
 from cosmos_agentic_retriever.agent.tool_contracts import ToolCall, execute_tool_call
+
+pytestmark = pytest.mark.anyio
 
 
 def _server() -> FastMCP:
@@ -32,8 +35,8 @@ def _session():
     return create_connected_server_and_client_session(_server())
 
 
-def test_offers_server_tools_except_agentic_search():
-    with open_mcp_tools(_session) as tools:
+async def test_offers_server_tools_except_agentic_search():
+    async with open_mcp_tools(_session) as tools:
         by_name = {tool.name: tool for tool in tools}
 
     assert set(by_name) == {"text_search", "broken"}
@@ -43,26 +46,26 @@ def test_offers_server_tools_except_agentic_search():
     assert set(search.parameters["properties"]) == {"container", "phrase", "n"}
 
 
-def test_exclude_can_be_changed():
-    with open_mcp_tools(_session, exclude=frozenset({"broken"})) as tools:
+async def test_exclude_can_be_changed():
+    async with open_mcp_tools(_session, exclude=frozenset({"broken"})) as tools:
         names = {tool.name for tool in tools}
 
     assert names == {"text_search", "agentic_search"}
 
 
-def test_call_returns_the_tool_text():
-    with open_mcp_tools(_session) as tools:
+async def test_call_returns_the_tool_text():
+    async with open_mcp_tools(_session) as tools:
         search = next(tool for tool in tools if tool.name == "text_search")
-        result = search(container="docs", phrase="battery", n=3)
+        result = await search(container="docs", phrase="battery", n=3)
 
     assert result.error is None
     assert result.content == "3 results for 'battery' in docs"
 
 
-def test_batch_runs_each_call_in_order():
-    with open_mcp_tools(_session) as tools:
+async def test_batch_runs_each_call_in_order():
+    async with open_mcp_tools(_session) as tools:
         search = next(tool for tool in tools if tool.name == "text_search")
-        results = search.handler(
+        results = await search.handler(
             [{"container": "a", "phrase": "x"}, {"container": "b", "phrase": "y", "n": 1}]
         )
 
@@ -76,20 +79,21 @@ def test_batch_runs_each_call_in_order():
     "name, arguments, message",
     [("broken", {}, "Cosmos is down"), ("text_search", {"container": "a"}, "phrase")],
 )
-def test_server_reported_failure_becomes_error(name, arguments, message):
-    with open_mcp_tools(_session) as tools:
+async def test_server_reported_failure_becomes_error(name, arguments, message):
+    async with open_mcp_tools(_session) as tools:
         by_name = {tool.name: tool for tool in tools}
-        response = execute_tool_call(by_name, ToolCall("c1", name, arguments))
+        response = await execute_tool_call(by_name, ToolCall("c1", name, arguments))
 
     assert response.content == ""
     assert message in (response.error or "")
 
 
-def test_tools_fail_after_the_session_closes():
-    with open_mcp_tools(_session) as tools:
+async def test_tools_fail_after_the_session_closes():
+    async with open_mcp_tools(_session) as tools:
         search = next(tool for tool in tools if tool.name == "text_search")
 
-    result = search(container="docs", phrase="battery")
+    with anyio.fail_after(5):
+        result = await search(container="docs", phrase="battery")
 
     assert result.content == ""
     assert result.error

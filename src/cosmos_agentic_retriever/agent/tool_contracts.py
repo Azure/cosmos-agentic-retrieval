@@ -1,7 +1,10 @@
 """Tools the agent can call: what a tool is, how it is called, and what it returns.
 
-- `Tool`: an action the model can request. Its handler takes a batch of argument
-  dicts (one per call) and returns one result per call, in order.
+Handlers are async: the service, the model client and MCP are async, and tools
+mostly wait on the network.
+
+- `Tool`: an action the model can request. Its async handler takes a batch of
+  argument dicts (one per call) and returns one result per call, in order.
 - `ToolCall`: one request from the model: the tool's name, its arguments, and an
   ID that matches the result to the request.
 - `InvalidToolCall`: a request whose arguments could not be parsed into an
@@ -17,7 +20,7 @@ names and handler exceptions become errors in the response, never exceptions.
 from __future__ import annotations
 
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any
 
@@ -64,9 +67,9 @@ class Tool:
     """A capability the model can invoke during a turn.
 
     ``parameters`` is a JSON Schema object (OpenAI conventions) describing the
-    arguments the model may pass. ``handler`` receives a list of argument dicts
-    and returns one string or `ToolExecutionResult` per dict, in order; a single
-    call is a batch of one. Only the content is shown to the model.
+    arguments the model may pass. ``handler`` is async: it receives a list of
+    argument dicts and returns one string or `ToolExecutionResult` per dict, in
+    order; a single call is a batch of one. Only the content is shown to the model.
     ``implementation`` names which implementation of the tool ran, for logs and
     comparisons; it defaults to the tool's name.
     """
@@ -74,14 +77,16 @@ class Tool:
     name: str
     description: str
     parameters: dict[str, Any]
-    handler: Callable[[list[dict[str, Any]]], Sequence[str | ToolExecutionResult]]
+    handler: Callable[
+        [list[dict[str, Any]]], Awaitable[Sequence[str | ToolExecutionResult]]
+    ]
     implementation: str | None = None
 
-    def __call__(self, **arguments: Any) -> ToolExecutionResult:
+    async def __call__(self, **arguments: Any) -> ToolExecutionResult:
         """Run one call and return its output, error, and timing."""
         started_at = time.perf_counter()
         try:
-            content = self.handler([arguments])[0]
+            content = (await self.handler([arguments]))[0]
         except Exception as exc:
             return ToolExecutionResult(
                 content="",
@@ -94,7 +99,7 @@ class Tool:
         return ToolExecutionResult(content=content, error=None, latency_s=elapsed)
 
 
-def execute_tool_call(
+async def execute_tool_call(
     tools_by_name: dict[str, Tool], tool_call: ToolCall
 ) -> ToolCallResponse:
     """Run the named tool, or return an error response for an unknown name."""
@@ -106,7 +111,7 @@ def execute_tool_call(
             error=f"unknown tool: {tool_call.name}",
             latency_s=0.0,
         )
-    result = tool(**tool_call.arguments)
+    result = await tool(**tool_call.arguments)
     return ToolCallResponse(
         call_id=tool_call.id,
         tool_implementation=tool.implementation or tool.name,

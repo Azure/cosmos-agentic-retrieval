@@ -1,6 +1,6 @@
 """Check model requests and replies without calling a model endpoint."""
 
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from openai.types.chat import ChatCompletion
@@ -10,11 +10,15 @@ from cosmos_agentic_retriever.agent import chat_client
 from cosmos_agentic_retriever.agent.loop import TokenUsage
 from cosmos_agentic_retriever.agent.tool_contracts import InvalidToolCall, Tool, ToolCall
 
+pytestmark = pytest.mark.anyio
+
 
 @pytest.fixture
 def client(monkeypatch):
     sdk = Mock()
-    monkeypatch.setattr(chat_client, "OpenAI", Mock(return_value=sdk))
+    sdk.chat.completions.create = AsyncMock()
+    sdk.close = AsyncMock()
+    monkeypatch.setattr(chat_client, "AsyncOpenAI", Mock(return_value=sdk))
     return chat_client.ChatClient(
         base_url="https://model.example.com/v1", model="test-model"
     ), sdk.chat.completions.create
@@ -43,9 +47,13 @@ def _reply(*, tool_calls=None):
 
 
 @pytest.mark.parametrize("token_parameter", ["max_tokens", "max_completion_tokens"])
-def test_complete_sends_model_options_and_tool_descriptions(client, token_parameter):
-    chat, create = client
-    chat.params = {token_parameter: 256, "temperature": 0.2, "model": "ignored"}
+async def test_complete_sends_model_options_and_tool_descriptions(client, token_parameter):
+    _, create = client
+    chat = chat_client.ChatClient(
+        "https://model.example.com/v1",
+        "test-model",
+        params={token_parameter: 256, "temperature": 0.2, "model": "ignored"},
+    )
     create.return_value = _reply()
     messages = [{"role": "user", "content": "Find recycling documents."}]
     handler = Mock()
@@ -56,7 +64,7 @@ def test_complete_sends_model_options_and_tool_descriptions(client, token_parame
         handler=handler,
     )
 
-    turn = chat.complete(messages, [tool])
+    turn = await chat.complete(messages, [tool])
 
     create.assert_called_once_with(
         **{
@@ -81,14 +89,16 @@ def test_complete_sends_model_options_and_tool_descriptions(client, token_parame
     assert turn.tool_calls == [] and turn.error is None
 
 
-def test_complete_returns_token_usage(client):
+async def test_complete_returns_token_usage(client):
     chat, create = client
     response = _reply()
     create.return_value = response
-    assert chat.complete([], []).usage == TokenUsage()
+    assert (await chat.complete([], [])).usage == TokenUsage()
 
     response.usage = CompletionUsage(prompt_tokens=120, completion_tokens=8, total_tokens=128)
-    assert chat.complete([], []).usage == TokenUsage(prompt_tokens=120, completion_tokens=8)
+    assert (await chat.complete([], [])).usage == TokenUsage(
+        prompt_tokens=120, completion_tokens=8
+    )
 
     response.usage = CompletionUsage(
         prompt_tokens=120,
@@ -97,7 +107,7 @@ def test_complete_returns_token_usage(client):
         prompt_tokens_details={"cached_tokens": 64},
         completion_tokens_details={"reasoning_tokens": 5},
     )
-    turn = chat.complete([], [])
+    turn = await chat.complete([], [])
 
     assert turn.usage == TokenUsage(
         prompt_tokens=120, completion_tokens=8, cached_prompt_tokens=64, reasoning_tokens=5
@@ -129,7 +139,7 @@ def test_complete_returns_token_usage(client):
         ),
     ],
 )
-def test_complete_returns_tool_calls_for_the_loop(client, arguments, expected):
+async def test_complete_returns_tool_calls_for_the_loop(client, arguments, expected):
     chat, create = client
     call = {
         "id": "call-1",
@@ -138,36 +148,36 @@ def test_complete_returns_tool_calls_for_the_loop(client, arguments, expected):
     }
     create.return_value = _reply(tool_calls=[call])
 
-    turn = chat.complete([], [])
+    turn = await chat.complete([], [])
 
     assert turn.error is None
     assert turn.tool_calls == [expected]
     assert turn.message["tool_calls"] == [call]
 
 
-def test_complete_returns_request_errors_to_the_loop(client):
+async def test_complete_returns_request_errors_to_the_loop(client):
     chat, create = client
     create.side_effect = RuntimeError("endpoint unavailable")
 
-    turn = chat.complete([], [])
+    turn = await chat.complete([], [])
 
     assert turn.error == "RuntimeError: endpoint unavailable"
     assert turn.tool_calls == []
 
 
-def test_complete_returns_error_for_missing_reply(client):
+async def test_complete_returns_error_for_missing_reply(client):
     chat, create = client
     response = _reply()
     response.choices = []
     create.return_value = response
 
-    turn = chat.complete([], [])
+    turn = await chat.complete([], [])
 
     assert turn.error == "ValueError: Model returned no choices."
     assert turn.tool_calls == []
 
 
-def test_complete_reports_unsupported_tool_calls(client):
+async def test_complete_reports_unsupported_tool_calls(client):
     chat, create = client
     create.return_value = _reply(
         tool_calls=[
@@ -179,7 +189,15 @@ def test_complete_reports_unsupported_tool_calls(client):
         ]
     )
 
-    turn = chat.complete([], [])
+    turn = await chat.complete([], [])
 
     assert turn.error == "TypeError: Unsupported tool call type: 'custom'."
     assert turn.tool_calls == []
+
+
+async def test_close_closes_the_sdk_client(client):
+    chat, _ = client
+
+    await chat.close()
+
+    chat_client.AsyncOpenAI.return_value.close.assert_awaited_once()

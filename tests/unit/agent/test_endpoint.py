@@ -4,14 +4,15 @@ from __future__ import annotations
 
 import json
 import time
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 
+import anyio
 import httpx
 import pytest
 from azure.core.credentials import AccessToken
 from azure.cosmos import ContainerProxy
 from fastapi.testclient import TestClient
-from openai import OpenAI
+from openai import AsyncOpenAI
 
 from cosmos_agentic_retriever import server
 from cosmos_agentic_retriever.agent import chat_client
@@ -40,7 +41,7 @@ class _FakeChat:
     def __init__(self, turns: list[LlmTurn]) -> None:
         self._turns = list(turns)
 
-    def complete(self, messages, tools) -> LlmTurn:
+    async def complete(self, messages, tools) -> LlmTurn:
         return self._turns.pop(0)
 
 
@@ -183,29 +184,37 @@ def test_configured_llm_builds_chat_client():
 
 
 class _FakeIdentity:
-    """A stand-in Azure credential that issues a fixed token."""
+    """A stand-in async Azure credential that issues a fixed token."""
 
     def __init__(self) -> None:
         self.scopes: tuple[str, ...] = ()
         self.closed = False
 
-    def get_token(self, *scopes, **options) -> AccessToken:
+    async def get_token(self, *scopes, **options) -> AccessToken:
         self.scopes = scopes
         return AccessToken("entra-token", int(time.time()) + 3600)
 
-    def close(self) -> None:
+    async def close(self) -> None:
         self.closed = True
 
 
 @pytest.mark.parametrize("api_key", ["model-key", None])
 def test_chat_client_signs_in_with_key_or_entra(monkeypatch, api_key):
     identity = _FakeIdentity()
-    monkeypatch.setattr(server, "DefaultAzureCredential", lambda: identity)
+    monkeypatch.setattr(server, "AsyncDefaultAzureCredential", lambda: identity)
+    sdk_options: dict = {}
+
+    def fake_sdk(**options):
+        sdk_options.update(options)
+        return Mock(close=AsyncMock())
+
+    monkeypatch.setattr(chat_client, "AsyncOpenAI", fake_sdk)
 
     with TestClient(_app(_settings(llm_api_key=api_key))) as http:
-        client_key = http.app.state.chat_client.api_key
+        assert isinstance(http.app.state.chat_client, ChatClient)
+        client_key = sdk_options["api_key"]
         if api_key is None:
-            assert client_key() == "entra-token"
+            assert anyio.run(client_key) == "entra-token"
             assert identity.scopes == (server.LLM_TOKEN_SCOPE,)
         else:
             assert client_key == api_key
@@ -366,14 +375,16 @@ def test_exhausted_sdk_retries_return_bad_gateway(monkeypatch):
         requests.append(request)
         return httpx.Response(503, json={"error": {"message": "private endpoint failure"}})
 
-    delay = Mock()
-    monkeypatch.setattr("openai._base_client.time.sleep", delay)
-    with httpx.Client(transport=httpx.MockTransport(unavailable)) as transport:
-        monkeypatch.setattr(
-            chat_client, "OpenAI", lambda **options: OpenAI(http_client=transport, **options)
-        )
-        with TestClient(_app(_settings())) as http:
-            response = http.post("/agentic_search", json={"query": "Find recycling documents."})
+    delay = AsyncMock()
+    monkeypatch.setattr("openai._base_client.anyio.sleep", delay)
+    transport = httpx.AsyncClient(transport=httpx.MockTransport(unavailable))
+    monkeypatch.setattr(
+        chat_client,
+        "AsyncOpenAI",
+        lambda **options: AsyncOpenAI(http_client=transport, **options),
+    )
+    with TestClient(_app(_settings())) as http:
+        response = http.post("/agentic_search", json={"query": "Find recycling documents."})
 
     assert len(requests) == 3
     assert delay.call_count == 2

@@ -9,12 +9,11 @@ return an error so the loop can stop.
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
-from dataclasses import dataclass, field
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 import structlog
-from openai import OpenAI
+from openai import AsyncOpenAI
 from openai.types.chat import ChatCompletionMessageFunctionToolCall
 from openai.types.completion_usage import CompletionUsage
 
@@ -79,42 +78,47 @@ def _read_usage(usage: CompletionUsage | None) -> TokenUsage:
     )
 
 
-@dataclass
 class ChatClient:
     """Send messages to the configured OpenAI-compatible chat endpoint.
 
     base_url is the API address; model is the model or deployment name. api_key is
-    a key, or a function returning a fresh Entra token. params adds request options
-    such as max_completion_tokens and temperature. The client supplies model,
-    messages, and tools even if params contains those keys.
+    a key, or an async function returning a fresh Entra token. params adds request
+    options such as max_completion_tokens and temperature. The client supplies
+    model, messages, and tools even if params contains those keys. Call close()
+    when done, to release the HTTP connections.
     """
 
-    base_url: str
-    model: str
-    api_key: str | Callable[[], str] = "unused"
-    params: dict[str, Any] = field(default_factory=dict)
-    timeout: float = 60.0
+    def __init__(
+        self,
+        base_url: str,
+        model: str,
+        *,
+        api_key: str | Callable[[], Awaitable[str]] = "unused",
+        params: dict[str, Any] | None = None,
+        timeout: float = 60.0,
+    ) -> None:
+        self.model = model
+        self._params = dict(params or {})
+        self._client = AsyncOpenAI(base_url=base_url, api_key=api_key, timeout=timeout)
 
-    def __post_init__(self) -> None:
-        """Create the SDK client with the configured endpoint and HTTP timeout."""
-        self._client = OpenAI(
-            base_url=self.base_url, api_key=self.api_key, timeout=self.timeout
-        )
+    async def close(self) -> None:
+        """Close the SDK client's HTTP connections."""
+        await self._client.close()
 
-    def complete(self, messages: list[dict[str, Any]], tools: list[Tool]) -> LlmTurn:
+    async def complete(self, messages: list[dict[str, Any]], tools: list[Tool]) -> LlmTurn:
         """Request the model's next reply without executing any tools.
 
         Return its text and requested tool calls to the loop. Set LlmTurn.error
         if the request fails or the response cannot be read.
         """
         request: dict[str, Any] = {
-            **self.params,
+            **self._params,
             "model": self.model,
             "messages": messages,
             "tools": to_openai_tools(tools),
         }
         try:
-            response = self._client.chat.completions.create(**request)  # type: ignore[call-overload]
+            response = await self._client.chat.completions.create(**request)  # type: ignore[call-overload]
             if not response.choices:
                 raise ValueError("Model returned no choices.")
             choice = response.choices[0].message

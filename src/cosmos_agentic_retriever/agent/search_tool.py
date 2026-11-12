@@ -4,12 +4,15 @@
 callable that runs one query against the in-process multi-container retriever.
 The tool validates the model's arguments, runs the search, and formats the ranked
 items as text the model reads and refines against. Each item is shown with its
-retrieval id so the model can refer to exact results.
+retrieval id so the model can refer to exact results. The search uses the
+synchronous Cosmos SDK, so it runs in a worker thread.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
+
+import anyio
 
 from cosmos_agentic_retriever.agent.tool_contracts import Tool
 from cosmos_agentic_retriever.orchestration import MultiSearchResult
@@ -70,7 +73,7 @@ def make_full_text_search_tool(
         "additionalProperties": False,
     }
 
-    def search_once(arguments: dict) -> str:
+    async def search_once(arguments: dict) -> str:
         query = arguments.get("query")
         if not isinstance(query, str) or not query.strip():
             return "Error: 'query' is required and must be a non-empty string."
@@ -78,11 +81,11 @@ def make_full_text_search_tool(
         if not isinstance(requested, int) or isinstance(requested, bool):
             return "Error: 'max_documents' must be an integer."
         count = max(1, min(requested, max_documents_cap))
-        result = search(query, count)
+        result = await anyio.to_thread.run_sync(search, query, count)
         return _format_results(result)
 
-    def handler(calls: list[dict]) -> list[str]:
-        return [search_once(arguments) for arguments in calls]
+    async def handler(calls: list[dict]) -> list[str]:
+        return [await search_once(arguments) for arguments in calls]
 
     return Tool(
         name="full_text_search",

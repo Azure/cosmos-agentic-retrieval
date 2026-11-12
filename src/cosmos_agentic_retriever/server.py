@@ -18,15 +18,17 @@ event loop.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Callable
-from contextlib import ExitStack, asynccontextmanager
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import AsyncExitStack, ExitStack, asynccontextmanager
 from dataclasses import asdict
 from typing import Any
 
 import anyio
 import structlog
 from azure.cosmos import CosmosClient
-from azure.identity import AzureCliCredential, DefaultAzureCredential, get_bearer_token_provider
+from azure.identity import AzureCliCredential, DefaultAzureCredential
+from azure.identity.aio import DefaultAzureCredential as AsyncDefaultAzureCredential
+from azure.identity.aio import get_bearer_token_provider
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -127,6 +129,7 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         resources = ExitStack()
+        model_resources = AsyncExitStack()
 
         def build_retrievers() -> dict[str, CorpusRetriever]:
             credential: str | AzureCliCredential | DefaultAzureCredential
@@ -166,24 +169,27 @@ def create_app(
                 },
                 max_workers=resolved.query_engine.max_concurrency,
             )
-            llm_auth: str | Callable[[], str]
+            llm_auth: str | Callable[[], Awaitable[str]]
             if resolved.llm_api_key is not None:
                 llm_auth = resolved.llm_api_key.get_secret_value()
             else:
-                identity = DefaultAzureCredential()
-                resources.callback(identity.close)
+                identity = AsyncDefaultAzureCredential()
+                model_resources.push_async_callback(identity.close)
                 llm_auth = get_bearer_token_provider(identity, LLM_TOKEN_SCOPE)
-            app.state.chat_client = ChatClient(
+            chat_client = ChatClient(
                 base_url=str(resolved.llm_base_url),
                 model=resolved.llm_model,
                 api_key=llm_auth,
                 params=dict(resolved.llm_params),
             )
+            model_resources.push_async_callback(chat_client.close)
+            app.state.chat_client = chat_client
             yield
         finally:
             app.state.retriever = None
             app.state.chat_client = None
             with anyio.CancelScope(shield=True):
+                await model_resources.aclose()
                 await anyio.to_thread.run_sync(resources.close)
 
     app = FastAPI(
@@ -337,14 +343,12 @@ def create_app(
             max_documents_cap=max_documents,
         )
         try:
-            result = await anyio.to_thread.run_sync(
-                lambda: run_agent_search(
-                    request.query,
-                    complete=client.complete,
-                    tools=[tool],
-                    system_prompt=SYSTEM_PROMPT,
-                    max_turns=resolved.agent_max_turns,
-                )
+            result = await run_agent_search(
+                request.query,
+                complete=client.complete,
+                tools=[tool],
+                system_prompt=SYSTEM_PROMPT,
+                max_turns=resolved.agent_max_turns,
             )
         except Exception:
             logger.exception("agent_search_failed")
