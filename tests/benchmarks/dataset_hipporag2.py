@@ -4,13 +4,22 @@ from __future__ import annotations
 
 import json
 from abc import abstractmethod
+from dataclasses import dataclass
 
 from dataset_contracts import (
     BenchmarkCollection,
+    Document,
     HFBenchmarkDataset,
-    Passage,
     Question,
 )
+
+
+@dataclass(frozen=True)
+class HippoRAGQuestion(Question):
+    """A question with its accepted answers and the titles of its supporting passages."""
+
+    answers: tuple[str, ...]
+    gold_titles: tuple[str, ...]
 
 
 def _dedupe_keep_order(values) -> tuple[str, ...]:
@@ -23,27 +32,27 @@ class HippoRAG2Dataset(HFBenchmarkDataset):
     repo = "osunlp/HippoRAG_2"
     revision = "5ec05b38deecc3318bb432c69865959c56058990"
 
-    def read_corpus_passages(self) -> list[Passage]:
+    def read_corpus_documents(self) -> list[Document]:
         records = json.loads(self.download_file(f"{self.name}_corpus.json").read_text())
         return [
-            Passage.from_title_and_text(r["title"], r["text"], self.name)
+            Document.from_title_and_text(r["title"], r["text"], self.name)
             for r in records
         ]
 
-    def read_questions(self) -> list[Question]:
+    def read_questions(self) -> list[HippoRAGQuestion]:
         records = json.loads(self.download_file(f"{self.name}.json").read_text())
         return [self.parse_question_record(r, i) for i, r in enumerate(records)]
 
     @abstractmethod
-    def parse_question_record(self, record: dict, index: int) -> Question:
-        """Turn one question record, and its position in the file, into a Question."""
+    def parse_question_record(self, record: dict, index: int) -> HippoRAGQuestion:
+        """Turn one question record, and its position in the file, into a question."""
 
 
 class HotpotQA(HippoRAG2Dataset):
     name = "hotpotqa"
 
-    def parse_question_record(self, record: dict, index: int) -> Question:
-        return Question(
+    def parse_question_record(self, record: dict, index: int) -> HippoRAGQuestion:
+        return HippoRAGQuestion(
             id=record["_id"],
             dataset=self.name,
             question=record["question"],
@@ -55,8 +64,8 @@ class HotpotQA(HippoRAG2Dataset):
 class TwoWikiMultihopQA(HippoRAG2Dataset):
     name = "2wikimultihopqa"
 
-    def parse_question_record(self, record: dict, index: int) -> Question:
-        return Question(
+    def parse_question_record(self, record: dict, index: int) -> HippoRAGQuestion:
+        return HippoRAGQuestion(
             id=record["_id"],
             dataset=self.name,
             question=record["question"],
@@ -68,8 +77,8 @@ class TwoWikiMultihopQA(HippoRAG2Dataset):
 class MuSiQue(HippoRAG2Dataset):
     name = "musique"
 
-    def parse_question_record(self, record: dict, index: int) -> Question:
-        return Question(
+    def parse_question_record(self, record: dict, index: int) -> HippoRAGQuestion:
+        return HippoRAGQuestion(
             id=record["id"],
             dataset=self.name,
             question=record["question"],
@@ -83,9 +92,9 @@ class MuSiQue(HippoRAG2Dataset):
 class NaturalQuestions(HippoRAG2Dataset):
     name = "nq_rear"
 
-    def parse_question_record(self, record: dict, index: int) -> Question:
+    def parse_question_record(self, record: dict, index: int) -> HippoRAGQuestion:
         # This file has no question IDs, so the position in the file is used.
-        return Question(
+        return HippoRAGQuestion(
             id=f"{self.name}-{index}",
             dataset=self.name,
             question=record["question"],
@@ -99,8 +108,8 @@ class NaturalQuestions(HippoRAG2Dataset):
 class PopQA(HippoRAG2Dataset):
     name = "popqa"
 
-    def parse_question_record(self, record: dict, index: int) -> Question:
-        return Question(
+    def parse_question_record(self, record: dict, index: int) -> HippoRAGQuestion:
+        return HippoRAGQuestion(
             id=str(record["id"]),
             dataset=self.name,
             question=record["question"],
@@ -119,9 +128,9 @@ class HippoRAG2Collection(BenchmarkCollection):
 
 if __name__ == "__main__":
     collection = HippoRAG2Collection()
-    passages = collection.read_merged_corpus_passages()
+    documents = collection.read_merged_corpus_documents()
     questions = collection.read_questions()
     for dataset in collection.datasets:
         count = sum(q.dataset == dataset.name for q in questions)
         print(f"{dataset.name}: {count} questions")
-    print(f"{len(passages)} unique passages")
+    print(f"{len(documents)} unique documents")
