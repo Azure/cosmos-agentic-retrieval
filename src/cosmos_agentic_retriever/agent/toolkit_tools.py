@@ -2,13 +2,15 @@
 
 Each definition keeps the toolkit tool's name, description and arguments, so the
 agent's tools match the toolkit. They are written out here rather than read from
-the toolkit at run time, so the agent's tools stay the same until we change them;
-`tests/live/test_toolkit_tools_live.py` checks them against a running toolkit.
+the toolkit at run time, so the agent's tools stay validated and benchmarked
+until we change them.
 
 Search tools (`text_search`, `vector_search`, `hybrid_search`,
-`get_recent_documents`) also take `returnDocuments`: results are trimmed with
-`TrimRules` and their text shortened unless it is true. It is not sent to the
-toolkit. Other tools return full text.
+`get_recent_documents`) can return many documents, so before
+the agent reads their results we cut long text short and drop embeddings. We
+add one argument of our own to these tools, `returnDocuments`: when the agent
+sets it to true, it gets the full text instead. Other tools, such as reading one
+document by its id, always return full text.
 
 This is the per-question policy layer, not another query engine. ToolkitClient
 owns transport; these handlers enforce request scope, retain evidence before
@@ -56,6 +58,7 @@ class ToolkitToolSpec:
 
     The toolkit's names and arguments stay intact. The search flag identifies
     tools that can return previews and need our local returnDocuments option.
+    Arguments in max_values are capped, and set to the cap when omitted.
     """
 
     name: str
@@ -63,6 +66,7 @@ class ToolkitToolSpec:
     properties: dict[str, Any]
     required: tuple[str, ...]
     search: bool = False
+    max_values: dict[str, int] = field(default_factory=dict)
 
     def agent_description(self, rules: TrimRules) -> str:
         """Tell the model how to recover full text when previewing is enabled."""
@@ -179,11 +183,17 @@ TOOLKIT_TOOLS: tuple[ToolkitToolSpec, ...] = (
     ),
     ToolkitToolSpec(
         "find_document_by_id",
-        "Find a document by its id in the specified database/container.",
+        "Finds a document by its id and optional partition key in the specified "
+        "database/container.",
         {
             "databaseId": _DATABASE,
             "containerId": _CONTAINER,
             "id": {"type": "string", "description": "The id of the document to find"},
+            "partitionKey": {
+                "type": ["string", "null"],
+                "description": "Optional partition key value to limit the query to a logical partition",
+                "default": None,
+            },
         },
         ("databaseId", "containerId", "id"),
     ),
@@ -199,6 +209,30 @@ TOOLKIT_TOOLS: tuple[ToolkitToolSpec, ...] = (
         ("databaseId", "containerId", "n"),
         search=True,
     ),
+    # TODO: enable query_documents after benchmarking (also uncomment its prompt
+    # guide in prompts.py and the skipped tests). The agent writes its own SQL, and
+    # a broad query can use a lot of database capacity.
+    # ToolkitToolSpec(
+    #     "query_documents",
+    #     "Executes a bounded SELECT-only Cosmos DB for NoSQL query.",
+    #     {
+    #         "databaseId": _DATABASE,
+    #         "containerId": _CONTAINER,
+    #         "queryText": {
+    #             "type": "string",
+    #             "description": "A single SELECT-only Cosmos DB for NoSQL query",
+    #         },
+    #         "maxItems": {
+    #             "type": "integer",
+    #             "description": "Maximum number of documents to return (1-20, default 20)",
+    #             "default": 20,
+    #         },
+    #     },
+    #     ("databaseId", "containerId", "queryText"),
+    #     search=True,
+    #     # The toolkit allows up to 1,000 results; more than 20 crowds the agent's context.
+    #     max_values={"maxItems": 20},
+    # ),
 )
 
 
@@ -272,6 +306,8 @@ class SearchEvidence:
             parsed = json.loads(result.content)
         except json.JSONDecodeError:
             return
+        if name == "query_documents" and isinstance(parsed, dict):
+            parsed = parsed.get("results", [])
         items = parsed if isinstance(parsed, list) else [parsed]
         seen: set[str] = set()
         trimmer = ResultTrimmer(self.rules)
@@ -348,6 +384,10 @@ class ToolkitToolAdapter:
         """Check scope before network access and keep evidence before building a preview."""
         forwarded = dict(arguments)
         full_text = forwarded.pop("returnDocuments", False) is True
+        for argument, cap in self._spec.max_values.items():
+            value = forwarded.get(argument, cap)
+            valid = isinstance(value, int) and not isinstance(value, bool)
+            forwarded[argument] = min(value, cap) if valid else cap
         problem = self._scope.problem(forwarded)
         if problem is not None:
             result = ToolExecutionResult(content="", error=problem)

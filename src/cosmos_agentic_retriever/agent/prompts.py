@@ -4,6 +4,26 @@ import json
 
 from cosmos_agentic_retriever.agent.toolkit_tools import SearchScope
 
+# TODO: enable with the query_documents tool after benchmarking (toolkit_tools.py):
+# insert this after the hybrid_search sentence in build_system_prompt.
+# QUERY_DOCUMENTS_GUIDE = (
+#     "Those search tools rank documents by how well they match your words or "
+#     "meaning. query_documents is different: it runs a Cosmos DB SQL query that "
+#     "you write (one SELECT over this container, always FROM c), and returns "
+#     "exactly the documents or values that meet its conditions. Use it when the "
+#     "question needs exact conditions on fields, sorting, counts or other "
+#     "totals, for example \"how many tickets are open\" or \"the five cheapest "
+#     "products under $200\":\n"
+#     "  SELECT VALUE COUNT(1) FROM c WHERE c.status = 'open'\n"
+#     "  SELECT TOP 5 c.id, c.name, c.price FROM c WHERE c.price < 200 "
+#     "ORDER BY c.price ASC\n"
+#     "Use field names from get_approximate_schema. Select c.id with any "
+#     "documents you may cite; a count or total has no document to cite. "
+#     "Queries cost database capacity shared with other users: keep them "
+#     "narrow with WHERE conditions and TOP, select only the fields you need, "
+#     "and avoid queries that read the whole container when a search would do. "
+# )
+
 
 def build_system_prompt(scope: SearchScope) -> str:
     if scope.database is None:

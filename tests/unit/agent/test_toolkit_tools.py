@@ -50,7 +50,7 @@ def test_offers_the_toolkit_tools_with_their_names():
     assert "returnDocuments" in text_search.parameters["properties"]
     assert "10 characters" in text_search.description
     assert "returnDocuments" not in tools["find_document_by_id"].parameters["properties"]
-    assert tools["find_document_by_id"].description.startswith("Find a document by its id")
+    assert tools["find_document_by_id"].description.startswith("Finds a document by its id")
 
 
 def test_names_choose_which_tools_are_offered():
@@ -86,8 +86,13 @@ async def test_return_documents_gives_full_text_and_is_not_forwarded():
 async def test_reading_a_document_keeps_full_text():
     toolkit = _FakeToolkit(ToolExecutionResult(content=json.dumps(DOCUMENT)))
 
-    result = await _tools(toolkit)["find_document_by_id"](databaseId="db", containerId="c", id="d1")
+    result = await _tools(toolkit)["find_document_by_id"](
+        databaseId="db", containerId="c", id="d1", partitionKey="d1"
+    )
 
+    assert toolkit.calls == [("find_document_by_id", {
+        "databaseId": "db", "containerId": "c", "id": "d1", "partitionKey": "d1"
+    })]
     assert json.loads(result.content) == {
         "id": "d1",
         "text": "a" * 25,
@@ -234,3 +239,47 @@ def test_projected_results_do_not_erase_a_previously_read_document():
 
     [item] = evidence.documents("", limit=1)
     assert item["document"] == {"id": "d1", "text": "full text", "score": 0.8}
+
+
+# TODO: enable with query_documents after benchmarking (see toolkit_tools.py).
+query_documents_disabled = pytest.mark.skip(reason="query_documents is off until benchmarked")
+
+
+@query_documents_disabled
+@pytest.mark.parametrize("requested, sent", [(None, 20), (5, 5), (500, 20), (True, 20), ("50", 20)])
+async def test_query_results_are_capped(requested, sent):
+    toolkit = _FakeToolkit(ToolExecutionResult(content='{"results":[]}'))
+    arguments = {"databaseId": "db", "containerId": "c", "queryText": "SELECT * FROM c"}
+    if requested is not None:
+        arguments["maxItems"] = requested
+
+    await _tools(toolkit)["query_documents"](**arguments)
+
+    assert toolkit.calls[0][1]["maxItems"] == sent
+
+
+@query_documents_disabled
+async def test_query_results_are_trimmed_and_kept_as_evidence():
+    evidence = SearchEvidence(RULES)
+    reply = {"results": [DOCUMENT], "requestCharge": 3.1, "truncated": False}
+    toolkit = _FakeToolkit(ToolExecutionResult(content=json.dumps(reply)))
+
+    result = await _tools(toolkit, evidence=evidence)["query_documents"](
+        databaseId="db", containerId="c", queryText="SELECT * FROM c"
+    )
+
+    content = json.loads(result.content)
+    assert content["results"][0]["text"] == "aaaaaaaaaa… [15 more characters]"
+    assert content["truncated"] is False
+    [document] = evidence.documents("", limit=5)
+    assert document["id"] == "d1" and document["document"]["text"] == "a" * 25
+
+
+@query_documents_disabled
+def test_query_aggregates_are_not_evidence():
+    evidence = SearchEvidence(RULES)
+    arguments = {"databaseId": "db", "containerId": "c"}
+    evidence.record("query_documents", arguments, ToolExecutionResult(content='{"results":[45881]}'))
+
+    assert evidence.searched == [{"database": "db", "container": "c"}]
+    assert evidence.documents("", limit=5) == []
