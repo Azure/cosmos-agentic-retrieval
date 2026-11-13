@@ -61,6 +61,12 @@ RUN_COSMOS_LIVE=1 python -m pytest tests/end_to_end/test_agent_integration.py -q
 This calls a real model and Cosmos through the Python test client. It does not
 run the .NET MCP server.
 
+The agent now calls a running toolkit's tools instead of querying Cosmos directly.
+Set `TOOLKIT_TEST_URL` to that toolkit's `/mcp` URL and `TOOLKIT_TEST_APP_ID` to
+its Entra app client ID. The toolkit's identity must be able to read the fixture
+database. The Python service uses the current Azure sign-in for toolkit tokens.
+Legacy `/full_text_search` tests still query the prepared Cosmos fixtures directly.
+
 To test the full MCP path, put the .NET 9 SDK on `PATH` and run:
 
 ```bash

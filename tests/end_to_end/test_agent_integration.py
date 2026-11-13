@@ -11,7 +11,6 @@ import os
 import shutil
 import socket
 import subprocess
-from contextlib import asynccontextmanager
 from pathlib import Path
 from threading import Event, Thread
 from xml.etree import ElementTree
@@ -34,6 +33,10 @@ pytestmark = [
         or not os.environ.get("COSMOS_TEST_LLM_MODEL"),
         reason="set COSMOS_TEST_LLM_BASE_URL and COSMOS_TEST_LLM_MODEL to run the agent",
     ),
+    pytest.mark.skipif(
+        not os.environ.get("TOOLKIT_TEST_URL") or not os.environ.get("TOOLKIT_TEST_APP_ID"),
+        reason="set TOOLKIT_TEST_URL and TOOLKIT_TEST_APP_ID for toolkit-backed agent checks",
+    ),
 ]
 
 
@@ -45,6 +48,8 @@ def agent_settings(live_settings):
         llm_base_url=os.environ["COSMOS_TEST_LLM_BASE_URL"],
         llm_model=os.environ["COSMOS_TEST_LLM_MODEL"],
         llm_api_key=os.environ.get("COSMOS_TEST_LLM_API_KEY"),
+        toolkit_mcp_url=os.environ["TOOLKIT_TEST_URL"],
+        toolkit_app_id=os.environ["TOOLKIT_TEST_APP_ID"],
     )
     return RetrieverConfig.model_validate(values)
 
@@ -55,16 +60,16 @@ def agent_http(agent_settings, synthetic_settings):
         update={"cosmos_containers": synthetic_settings.cosmos_containers}, deep=True
     )
     with TestClient(create_app(settings)) as client:
-        try:
-            yield client
-        finally:
-            client.app.state.chat_client._client.close()
+        yield client
 
 
-def test_agent_search_answers_with_supporting_documents(agent_http):
+def test_agent_search_answers_with_supporting_documents(agent_http, agent_settings):
     response = agent_http.post(
         "/agentic_search",
-        json={"query": "What do the documents say about battery recycling?"},
+        json={
+            "query": "What do the documents say about battery recycling?",
+            "database": agent_settings.cosmos_database,
+        },
     )
     assert response.status_code == 200, response.text
     body = response.json()
@@ -72,30 +77,20 @@ def test_agent_search_answers_with_supporting_documents(agent_http):
     assert body["turns"] >= 1
     assert isinstance(body["answer"], str) and body["answer"].strip()
     assert body["documents"], "the agent should return supporting documents"
+    assert all("document" in item and "id" in item for item in body["documents"])
 
 
 @pytest.fixture(scope="session")
 def agent_service_url(agent_settings):
     """Serve the real agent on a free loopback port for the .NET test process."""
     app = create_app(agent_settings)
-    original_lifespan = app.router.lifespan_context
     ready = Event()
-
-    @asynccontextmanager
-    async def lifespan(application):
-        async with original_lifespan(application):
-            sdk = application.state.chat_client._client
-            try:
-                yield
-            finally:
-                sdk.close()
 
     class TestServer(uvicorn.Server):
         async def startup(self, sockets=None):
             await super().startup(sockets=sockets)
             ready.set()
 
-    app.router.lifespan_context = lifespan
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
         listener.listen(128)

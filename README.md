@@ -77,6 +77,9 @@ Connect an MCP client such as VS Code to the toolkit, as described in the
 [toolkit's README](https://github.com/AzureCosmosDB/MCPToolKit#vs-code-configuration),
 and ask a question that uses `agentic_search`. 
 
+Specify a `database` and, optionally, a `container` to limit the search.
+Omit both to let the agent discover where to search.
+
 
 ## Updating the configuration
 
@@ -85,12 +88,14 @@ Step 3 again. It builds a new image and replaces the service's container.
 
 ## Limitations
 
-- *Full-text search only.* Vector and hybrid search are not supported yet.
+- *Vector and hybrid search.* Require indexed stored embeddings and a matching
+  embedding model configured in the toolkit.
 - *Read-only.* The service never creates or changes databases, containers,
   indexes, or documents.
 - *Shares access control with MCP Toolkit.* Only callers allowed to use
 `agentic_search` through the MCP Toolkit reach the service, which listens only
-inside the app. 
+inside the app. Searches use the toolkit's Cosmos permissions, not the individual
+caller's.
 
 ## Run Locally for Testing
 
@@ -102,6 +107,8 @@ python -m pip install .
 cp config.example.yaml config.local.yaml    # fill in as in Step 2
 az login
 export COSMOS_RETRIEVER_CONFIG_FILE=./config.local.yaml
+export TOOLKIT_APP_ID=YOUR-TOOLKIT-ENTRA-APP-CLIENT-ID
+export TOOLKIT_MCP_URL=http://127.0.0.1:8080/mcp
 python -m cosmos_agentic_retriever serve
 ```
 

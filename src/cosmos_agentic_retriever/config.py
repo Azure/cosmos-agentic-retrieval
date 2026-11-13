@@ -95,13 +95,20 @@ class RetrieverConfig(BaseSettings):
     # Default: the toolkit container in the same Container App.
     toolkit_mcp_url: AnyHttpUrl = AnyHttpUrl("http://127.0.0.1:8080/mcp")
     # Client ID of the toolkit's Entra app; tokens for the toolkit are requested for it.
-    toolkit_app_id: str | None = Field(default=None, min_length=1)
+    toolkit_app_id: str = Field(min_length=1)
     # How toolkit results are trimmed before the agent reads them; see agent/result_trimming.py.
     tool_result_text_limit: int = Field(default=512, ge=1)
     tool_result_min_vector_dim: int = Field(default=128, ge=2)
     tool_result_dropped_fields: list[str] = Field(
         default_factory=lambda: list(DEFAULT_DROPPED_FIELDS)
     )
+
+    @field_validator("toolkit_app_id")
+    @classmethod
+    def _toolkit_app_id(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("configure the toolkit's Entra app client ID")
+        return value
 
     @field_validator("cosmos_database")
     @classmethod

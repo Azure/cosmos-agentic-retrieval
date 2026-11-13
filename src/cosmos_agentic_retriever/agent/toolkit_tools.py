@@ -3,7 +3,7 @@
 Each definition keeps the toolkit tool's name, description and arguments, so the
 agent's tools match the toolkit. They are written out here rather than read from
 the toolkit at run time, so the agent's tools stay the same until we change them;
-`tests/live/test_toolkit_tools.py` checks them against a running toolkit.
+`tests/live/test_toolkit_tools_live.py` checks them against a running toolkit.
 
 Search tools (`text_search`, `vector_search`, `hybrid_search`,
 `get_recent_documents`) also take `returnDocuments`: results are trimmed with
@@ -18,10 +18,10 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from typing import Any
 
-from cosmos_agentic_retriever.agent.result_trimming import TrimRules, trim_json_text
+from cosmos_agentic_retriever.agent.result_trimming import TrimRules, trim_json_text, trim_value
 from cosmos_agentic_retriever.agent.tool_contracts import Tool, ToolExecutionResult
 from cosmos_agentic_retriever.agent.toolkit_client import ToolkitClient
 
@@ -199,6 +199,78 @@ class SearchScope:
         return None
 
 
+@dataclass
+class SearchEvidence:
+    """Documents and tool failures collected for one question, before text shortening."""
+
+    rules: TrimRules
+    errors: list[dict[str, Any]] = field(default_factory=list)
+    document_calls: int = 0
+    _documents: dict[tuple[str, str, str], dict[str, Any]] = field(default_factory=dict)
+    _scores: dict[tuple[str, str, str], float] = field(default_factory=dict)
+    _searched: dict[tuple[str, str], None] = field(default_factory=dict)
+
+    @property
+    def searched(self) -> list[dict[str, str]]:
+        return [
+            {"database": database, "container": container}
+            for database, container in self._searched
+        ]
+
+    def record(
+        self, name: str, arguments: dict[str, Any], result: ToolExecutionResult
+    ) -> None:
+        document_tool = name == "find_document_by_id" or any(
+            spec.name == name and spec.search for spec in TOOLKIT_TOOLS
+        )
+        self.document_calls += int(document_tool)
+        target = {
+            field_name: arguments[argument]
+            for field_name, argument in (("database", "databaseId"), ("container", "containerId"))
+            if argument in arguments
+        }
+        if result.error is not None:
+            self.errors.append({"tool": name, **target, "error": result.error})
+            return
+        if not document_tool or set(target) != {"database", "container"}:
+            return
+        database, container = target["database"], target["container"]
+        self._searched[(database, container)] = None
+        try:
+            parsed = json.loads(result.content)
+        except json.JSONDecodeError:
+            return
+        items = parsed if isinstance(parsed, list) else [parsed]
+        seen: set[str] = set()
+        for rank, item in enumerate(items):
+            if not isinstance(item, dict):
+                continue
+            item_id = item.get("id")
+            if not isinstance(item_id, str) or not item_id or item_id in seen:
+                continue
+            seen.add(item_id)
+            key = (database, container, item_id)
+            previous = self._documents.get(key, {}).get("document", {})
+            self._documents[key] = {
+                "database": database,
+                "container": container,
+                "id": item_id,
+                "document": {**previous, **trim_value(item, self.rules, shorten_text=False)},
+            }
+            self._scores[key] = self._scores.get(key, 0.0) + 1.0 / (60 + rank)
+
+    def documents(self, answer: str, *, limit: int) -> list[dict[str, Any]]:
+        """Prefer cited documents, then reciprocal rank across successful calls."""
+        keys = sorted(
+            self._documents,
+            key=lambda key: (
+                f"[{key[0]}/{key[1]}/{key[2]}]" not in answer,
+                -self._scores[key],
+            ),
+        )
+        return [self._documents[key] for key in keys[:limit]]
+
+
 def _toolkit_error(text: str) -> str | None:
     """The message of a toolkit error reply such as {"error": "...", "statusCode": 429}."""
     try:
@@ -234,6 +306,7 @@ def make_toolkit_tools(
     scope: SearchScope,
     rules: TrimRules,
     names: Iterable[str] | None = None,
+    evidence: SearchEvidence | None = None,
 ) -> list[Tool]:
     """Build agent tools for the toolkit tools in ``names`` (default: all of them)."""
     wanted = None if names is None else set(names)
@@ -247,15 +320,21 @@ def make_toolkit_tools(
             full_text = forwarded.pop("returnDocuments", False) is True
             problem = scope.problem(forwarded)
             if problem is not None:
-                return ToolExecutionResult(content="", error=problem)
-            result = await client.call_tool(spec.name, forwarded)
+                result = ToolExecutionResult(content="", error=problem)
+            else:
+                result = await client.call_tool(spec.name, forwarded)
+                if result.error is None:
+                    error = _toolkit_error(result.content)
+                    if error is not None:
+                        result = replace(result, content="", error=error)
+            if evidence is not None:
+                evidence.record(spec.name, forwarded, result)
             if result.error is not None:
                 return result
-            error = _toolkit_error(result.content)
-            if error is not None:
-                return ToolExecutionResult(content="", error=error)
             shorten = spec.search and not full_text
-            return ToolExecutionResult(content=trim_json_text(result.content, rules, shorten_text=shorten))
+            return replace(
+                result, content=trim_json_text(result.content, rules, shorten_text=shorten)
+            )
 
         async def handler(calls: list[dict[str, Any]]) -> list[ToolExecutionResult]:
             return [await call(arguments) for arguments in calls]

@@ -8,7 +8,7 @@ import pytest
 
 from cosmos_agentic_retriever.agent.result_trimming import TrimRules
 from cosmos_agentic_retriever.agent.tool_contracts import ToolCall, ToolExecutionResult, execute_tool_call
-from cosmos_agentic_retriever.agent.toolkit_tools import SearchScope, make_toolkit_tools
+from cosmos_agentic_retriever.agent.toolkit_tools import SearchEvidence, SearchScope, make_toolkit_tools
 
 pytestmark = pytest.mark.anyio
 
@@ -155,3 +155,82 @@ async def test_client_failures_pass_through():
     result = await _tools(toolkit)["list_databases"]()
 
     assert result.error == "The toolkit call failed: ConnectionError"
+
+
+async def test_evidence_keeps_full_text_without_embeddings_or_system_fields():
+    evidence = SearchEvidence(RULES)
+    toolkit = _FakeToolkit()
+
+    result = await _tools(toolkit, evidence=evidence)["text_search"](
+        databaseId="db", containerId="c", property="text", searchPhrase="x"
+    )
+
+    assert "more characters" in result.content
+    [document] = evidence.documents("", limit=10)
+    assert document == {
+        "database": "db",
+        "container": "c",
+        "id": "d1",
+        "document": {
+            "id": "d1", "text": "a" * 25, "embedding": "[4-dimension vector omitted]"
+        },
+    }
+    assert evidence.searched == [{"database": "db", "container": "c"}]
+
+
+def test_evidence_deduplicates_by_source_merges_ranks_and_prefers_citations():
+    evidence = SearchEvidence(RULES)
+    arguments = {"databaseId": "db", "containerId": "c"}
+    evidence.record("text_search", arguments, ToolExecutionResult(content=json.dumps([
+        {"id": "first"}, {"id": "repeated"}, {"id": "cited"}
+    ])))
+    evidence.record("hybrid_search", arguments, ToolExecutionResult(
+        content='[{"id":"repeated"}]'
+    ))
+    evidence.record("find_document_by_id", {**arguments, "containerId": "other"},
+                    ToolExecutionResult(content='{"id":"first","text":"read"}'))
+
+    assert [item["id"] for item in evidence.documents("", limit=2)] == ["repeated", "first"]
+    documents = evidence.documents("Sources: [db/c/cited]", limit=10)
+    assert documents[0]["id"] == "cited"
+    assert len(documents) == 4
+    assert documents[-1]["container"] == "other"
+
+
+async def test_evidence_records_toolkit_errors_and_does_not_invent_documents():
+    evidence = SearchEvidence(RULES)
+    toolkit = _FakeToolkit(ToolExecutionResult(content='{"error":"busy","statusCode":429}'))
+
+    await _tools(toolkit, evidence=evidence)["text_search"](databaseId="db", containerId="c")
+
+    assert evidence.document_calls == 1
+    assert evidence.searched == []
+    assert evidence.documents("Sources: [db/c/nonexistent]", limit=5) == []
+    assert evidence.errors == [{
+        "tool": "text_search", "database": "db", "container": "c",
+        "error": "busy (status 429)",
+    }]
+
+
+def test_empty_search_is_successful_and_discovery_is_not_evidence():
+    evidence = SearchEvidence(RULES)
+    arguments = {"databaseId": "db", "containerId": "c"}
+    evidence.record("get_approximate_schema", arguments,
+                    ToolExecutionResult(content='{"id":"not-a-document"}'))
+    evidence.record("text_search", arguments, ToolExecutionResult(content="[]"))
+
+    assert evidence.document_calls == 1
+    assert evidence.searched == [{"database": "db", "container": "c"}]
+    assert evidence.documents("", limit=5) == []
+
+
+def test_projected_results_do_not_erase_a_previously_read_document():
+    evidence = SearchEvidence(RULES)
+    arguments = {"databaseId": "db", "containerId": "c"}
+    evidence.record("find_document_by_id", arguments,
+                    ToolExecutionResult(content='{"id":"d1","text":"full text"}'))
+    evidence.record("vector_search", arguments,
+                    ToolExecutionResult(content='[{"id":"d1","score":0.8}]'))
+
+    [item] = evidence.documents("", limit=1)
+    assert item["document"] == {"id": "d1", "text": "full text", "score": 0.8}

@@ -1,9 +1,10 @@
-"""Check the MCP search request and response contract without cloud calls."""
+"""Agent HTTP requests through in-memory MCP sessions, without cloud calls."""
 
 from __future__ import annotations
 
 import json
 import time
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, Mock
 
@@ -13,6 +14,8 @@ import pytest
 from azure.core.credentials import AccessToken
 from azure.cosmos import ContainerProxy
 from fastapi.testclient import TestClient
+from mcp.server.fastmcp import FastMCP
+from mcp.shared.memory import create_connected_server_and_client_session
 from openai import AsyncOpenAI
 
 from cosmos_agentic_retriever import server
@@ -22,69 +25,82 @@ from cosmos_agentic_retriever.agent.loop import LlmTurn, TokenUsage
 from cosmos_agentic_retriever.agent.tool_contracts import ToolCall
 from cosmos_agentic_retriever.agent.toolkit_client import ToolkitClient
 from cosmos_agentic_retriever.config import RetrieverConfig
-from cosmos_agentic_retriever.orchestration import (
-    ContainerItem,
-    ContainerTarget,
-    MultiSearchResult,
-)
-from cosmos_agentic_retriever.query_engine import (
-    CosmosExecutor,
-    QueryEngineConfig,
-)
+from cosmos_agentic_retriever.query_engine import CosmosExecutor, QueryEngineConfig
 from cosmos_agentic_retriever.query_engine.retriever import CorpusRetriever
 from cosmos_agentic_retriever.server import create_app
 
 
 class _FakeChat:
-    """A stand-in chat client returning scripted turns for the loop."""
-
     model = "fake-model"
 
     def __init__(self, turns: list[LlmTurn]) -> None:
         self._turns = list(turns)
+        self.tools_seen: list[set[str]] = []
+        self.messages_seen: list[list[dict]] = []
 
     async def complete(self, messages, tools) -> LlmTurn:
+        self.tools_seen.append({tool.name for tool in tools})
+        self.messages_seen.append(list(messages))
         return self._turns.pop(0)
 
 
-class _FakeRetriever:
-    """A stand-in retriever returning fixed items for any search."""
+class _Toolkit:
+    def __init__(self) -> None:
+        self.server = FastMCP("endpoint-test")
+        self.calls: list[tuple[str, dict]] = []
+        self.results = {"hi": [{
+            "id": "d1", "title": "Evidence", "text": "a" * 1000,
+            "embedding": [0.1] * 128, "_rid": "internal",
+        }]}
 
-    def __init__(self, items: list[ContainerItem]) -> None:
-        self._items = items
+        @self.server.tool()
+        async def list_databases() -> list[str]:
+            self.calls.append(("list_databases", {}))
+            return ["D", "OTHER"]
 
-    def search(self, requests, *, limit) -> MultiSearchResult:
-        return MultiSearchResult(items=list(self._items[:limit]), searched=list(requests))
+        @self.server.tool()
+        async def list_collections(databaseId: str) -> list[str]:
+            self.calls.append(("list_collections", {"databaseId": databaseId}))
+            return ["C", "other"]
 
+        @self.server.tool()
+        async def get_approximate_schema(databaseId: str, containerId: str) -> dict:
+            self.calls.append(("get_approximate_schema", {
+                "databaseId": databaseId, "containerId": containerId,
+            }))
+            return {"sampleSize": 1, "properties": [{"name": "text", "type": "string"}]}
 
-def _document(retrieval_id: str, rank: int, text: str = "") -> ContainerItem:
-    return ContainerItem(
-        item_id=retrieval_id,
-        rank=rank,
-        text=text,
-        database="D",
-        container="A",
-        retrieval_id=retrieval_id,
-    )
+        @self.server.tool()
+        async def text_search(
+            databaseId: str, containerId: str, property: str, searchPhrase: str, n: int = 10,
+        ) -> str:
+            self.calls.append(("text_search", {
+                "databaseId": databaseId, "containerId": containerId,
+                "property": property, "searchPhrase": searchPhrase, "n": n,
+            }))
+            if searchPhrase == "fail":
+                raise RuntimeError("Cosmos busy")
+            return json.dumps(self.results.get(searchPhrase, [])[:n])
+
+        @self.server.tool()
+        async def find_document_by_id(databaseId: str, containerId: str, id: str) -> dict:
+            self.calls.append(("find_document_by_id", {
+                "databaseId": databaseId, "containerId": containerId, "id": id,
+            }))
+            return next(item for items in self.results.values() for item in items if item["id"] == id)
 
 
 def _settings(**options) -> RetrieverConfig:
-    # A fake key keeps tests from signing in to Azure; pass llm_api_key=None to test Entra.
     options.setdefault("llm_api_key", "test-key")
+    options.setdefault("toolkit_app_id", "app-123")
     return RetrieverConfig(
         account_uri="https://example.documents.azure.com",
         cosmos_database="D",
         llm_base_url="https://model.example.com/v1",
         llm_model="test-model",
-        cosmos_containers={
-            "C": {
-                "cosmos_schema": {
-                    "item_id_path": "/id",
-                    "partition_key_paths": ["/tenant"],
-                    "text_paths": ["/text"],
-                }
-            }
-        },
+        cosmos_containers={"C": {"cosmos_schema": {
+            "item_id_path": "/id", "partition_key_paths": ["/tenant"], "text_paths": ["/text"],
+        }}},
         **options,
     )
 
@@ -95,89 +111,231 @@ def _app(settings: RetrieverConfig):
         container = Mock(spec=ContainerProxy)
         container.query_items.side_effect = lambda **kwargs: iter([])
         retrievers[name] = CorpusRetriever(
-            container=container,
-            schema=config.cosmos_schema,
+            container=container, schema=config.cosmos_schema,
             partition_policy=config.partition_policy,
             executor=CosmosExecutor(config=QueryEngineConfig()),
         )
     return create_app(settings, retrievers=retrievers)
 
 
-def _search_then_answer(query="hi", call_id="c1") -> list[LlmTurn]:
-    return [
-        LlmTurn(
-            message={
-                "role": "assistant",
-                "content": "",
-                "tool_calls": [
-                    {
-                        "id": call_id,
-                        "type": "function",
-                        "function": {
-                            "name": "full_text_search",
-                            "arguments": json.dumps({"query": query}),
-                        },
-                    }
-                ],
-            },
-            content="",
-            tool_calls=[ToolCall(call_id, "full_text_search", {"query": query})],
-            usage=TokenUsage(
-                prompt_tokens=100, completion_tokens=10, cached_prompt_tokens=40, reasoning_tokens=6
-            ),
-        ),
-        LlmTurn(
-            message={"role": "assistant", "content": "the answer"},
-            content="the answer",
-            usage=TokenUsage(
-                prompt_tokens=150, completion_tokens=5, cached_prompt_tokens=0, reasoning_tokens=0
-            ),
-        ),
+@pytest.fixture
+def http():
+    toolkit = _Toolkit()
+    with TestClient(_app(_settings())) as client:
+        client.app.state.toolkit = ToolkitClient(
+            lambda: create_connected_server_and_client_session(toolkit.server)
+        )
+        yield client, toolkit
+
+
+def _call(name="text_search", arguments=None, call_id="c1") -> LlmTurn:
+    if arguments is None:
+        arguments = {
+            "databaseId": "D", "containerId": "C", "property": "text", "searchPhrase": "hi",
+        }
+    return LlmTurn(
+        message={"role": "assistant", "content": "", "tool_calls": [{
+            "id": call_id, "type": "function",
+            "function": {"name": name, "arguments": json.dumps(arguments)},
+        }]},
+        tool_calls=[ToolCall(call_id, name, arguments)],
+        usage=TokenUsage(100, 10, 40, 6),
+    )
+
+
+def _answer(text="the answer") -> LlmTurn:
+    return LlmTurn(
+        message={"role": "assistant", "content": text}, content=text,
+        usage=TokenUsage(150, 5, 0, 0),
+    )
+
+
+def test_agent_search_runs_toolkit_tools_and_returns_full_evidence(http):
+    client, toolkit = http
+    chat = _FakeChat([_call(), _answer("the answer\nSources: [D/C/d1]")])
+    client.app.state.chat_client = chat
+    client.app.state.retriever = Mock(search=Mock(side_effect=AssertionError("legacy search used")))
+
+    response = client.post("/agentic_search", json={"query": "what is up?"})
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["answer"] == "the answer\nSources: [D/C/d1]"
+    assert body["terminal_reason"] == "stop" and body["turns"] == 2
+    assert body["tool_calls"] == {"text_search": 1} and body["model"] == "fake-model"
+    assert body["usage"] == {
+        "prompt_tokens": 250, "completion_tokens": 15,
+        "cached_prompt_tokens": 40, "reasoning_tokens": 6,
+    }
+    assert body["searched"] == [{"database": "D", "container": "C"}]
+    assert body["errors"] == [] and body["partial"] is False
+    [document] = body["documents"]
+    assert document["database"] == "D" and document["container"] == "C" and document["id"] == "d1"
+    assert document["document"]["text"] == "a" * 1000
+    assert document["document"]["embedding"] == "[128-dimension vector omitted]"
+    assert "_rid" not in document["document"]
+    assert "more characters" in chat.messages_seen[-1][-1]["content"]
+    assert toolkit.calls[0][0] == "text_search"
+
+
+@pytest.mark.parametrize("scope, listing", [
+    ({}, {"list_databases", "list_collections"}),
+    ({"database": "D"}, {"list_collections"}),
+    ({"database": "D", "container": "C"}, set()),
+])
+def test_scope_selects_discovery_tools_and_prompt(http, scope, listing):
+    client, _ = http
+    chat = _FakeChat([_answer()])
+    client.app.state.chat_client = chat
+
+    response = client.post("/agentic_search", json={"query": "question", **scope})
+
+    assert response.status_code == 200
+    assert chat.tools_seen[0] & {"list_databases", "list_collections"} == listing
+    assert "agentic_search" not in chat.tools_seen[0] and "full_text_search" not in chat.tools_seen[0]
+    prompt = chat.messages_seen[0][0]["content"]
+    assert "get_approximate_schema" in prompt and "selectProperties must include id" in prompt
+    assert "[database/container/id]" in prompt
+
+
+def test_agent_can_discover_then_search_without_scope(http):
+    client, toolkit = http
+    client.app.state.chat_client = _FakeChat([
+        _call("list_databases", {}),
+        _call("list_collections", {"databaseId": "OTHER"}, "c2"),
+        _call("get_approximate_schema", {"databaseId": "OTHER", "containerId": "other"}, "c3"),
+        _call(arguments={
+            "databaseId": "OTHER", "containerId": "other", "property": "text", "searchPhrase": "hi",
+        }, call_id="c4"),
+        _answer(),
+    ])
+
+    response = client.post("/agentic_search", json={"query": "find something"})
+
+    assert response.status_code == 200, response.text
+    assert response.json()["documents"][0]["database"] == "OTHER"
+    assert [name for name, _ in toolkit.calls] == [
+        "list_databases", "list_collections", "get_approximate_schema", "text_search",
     ]
 
 
-def test_agent_search_runs_loop_and_returns_answer():
-    with TestClient(_app(_settings())) as http:
-        http.app.state.chat_client = _FakeChat(_search_then_answer())
-        response = http.post("/agentic_search", json={"query": "what is up?"})
+@pytest.mark.parametrize("arguments", [
+    {"databaseId": "OTHER", "containerId": "C", "property": "text", "searchPhrase": "hi"},
+    {"databaseId": "D", "containerId": "other", "property": "text", "searchPhrase": "hi"},
+])
+def test_out_of_scope_call_never_reaches_toolkit(http, arguments):
+    client, toolkit = http
+    client.app.state.chat_client = _FakeChat([_call(arguments=arguments), _answer()])
+
+    response = client.post("/agentic_search", json={
+        "query": "question", "database": "D", "container": "C",
+    })
+
+    assert response.status_code == 500
+    assert toolkit.calls == [] and response.json()["errors"]
+    assert response.json()["answer"] == ""
+
+
+@pytest.mark.parametrize("limit, service_cap", [(1, 10), (50, 1), (8, 10)])
+def test_evidence_limit_and_citation_priority(http, limit, service_cap):
+    client, toolkit = http
+    toolkit.results["hi"] = [{"id": f"d{index}", "text": str(index)} for index in range(10)]
+    app = _app(_settings(agent_max_documents=service_cap))
+    with TestClient(app) as scoped:
+        scoped.app.state.toolkit = client.app.state.toolkit
+        scoped.app.state.chat_client = _FakeChat([_call(), _answer("Sources: [D/C/d9]")])
+        response = scoped.post("/agentic_search", json={"query": "question", "maxDocuments": limit})
+
     assert response.status_code == 200
-    assert response.json() == {
-        "answer": "the answer",
-        "documents": [],
-        "terminal_reason": "stop",
-        "turns": 2,
-        "model": "fake-model",
-        "tool_calls": {"full_text_search": 1},
-        "usage": {
-            "prompt_tokens": 250,
-            "completion_tokens": 15,
-            "cached_prompt_tokens": 40,
-            "reasoning_tokens": 6,
-        },
-        "searched": [{"database": "D", "container": "C"}],
-        "errors": [],
-        "partial": False,
-    }
+    documents = response.json()["documents"]
+    assert len(documents) == min(limit, service_cap)
+    assert documents[0]["id"] == "d9"
 
 
-def test_agent_search_returns_supporting_documents():
-    with TestClient(_app(_settings())) as http:
-        http.app.state.chat_client = _FakeChat(_search_then_answer())
-        http.app.state.retriever = _FakeRetriever(
-            [_document("d1", 0, "recycling one"), _document("d2", 1, "recycling two")]
-        )
-        response = http.post("/agentic_search", json={"query": "recycling?"})
+@pytest.mark.parametrize("partial", [False, True])
+def test_tool_failures_are_reported_without_claiming_no_matches(http, partial):
+    client, _ = http
+    failed = _call(arguments={
+        "databaseId": "D", "containerId": "C", "property": "text", "searchPhrase": "fail",
+    })
+    turns = [failed] + ([_call(call_id="c2")] if partial else []) + [_answer()]
+    client.app.state.chat_client = _FakeChat(turns)
+
+    response = client.post("/agentic_search", json={"query": "question"})
+
+    assert response.status_code == (200 if partial else 500), response.text
     body = response.json()
-    assert body["answer"] == "the answer"
-    assert [doc["retrieval_id"] for doc in body["documents"]] == ["d1", "d2"]
-    assert body["documents"][0]["text"] == "recycling one"
+    assert body["partial"] is partial and "Cosmos busy" in body["errors"][0]["error"]
+    if not partial:
+        assert body["answer"] == "" and body["documents"] == []
 
 
-def test_agent_search_blank_query_rejected():
-    with TestClient(_app(_settings())) as http:
-        http.app.state.chat_client = _FakeChat([])
-        response = http.post("/agentic_search", json={"query": "   "})
-    assert response.status_code == 422
+def test_empty_search_is_not_a_failure(http):
+    client, _ = http
+    client.app.state.chat_client = _FakeChat([
+        _call(arguments={"databaseId": "D", "containerId": "C", "property": "text", "searchPhrase": "none"}),
+        _answer("No matching documents found."),
+    ])
+    response = client.post("/agentic_search", json={"query": "question"})
+    assert response.status_code == 200 and response.json()["errors"] == []
+    assert response.json()["documents"] == []
+
+
+def test_model_failure_keeps_evidence_but_not_unfinished_answer(http):
+    client, _ = http
+    client.app.state.chat_client = _FakeChat([
+        _call(), LlmTurn(message={"role": "assistant", "content": ""}, error="private-key private-url"),
+    ])
+    response = client.post("/agentic_search", json={"query": "question"})
+    assert response.status_code == 502
+    assert response.json()["error"] == "Model request failed."
+    assert response.json()["answer"] == "" and response.json()["documents"][0]["id"] == "d1"
+    assert "private-" not in response.text
+
+
+def test_simultaneous_questions_keep_evidence_separate(http):
+    client, toolkit = http
+    toolkit.results.update({name: [{"id": name, "text": name}] for name in ("one", "two")})
+
+    class ConcurrentChat:
+        model = "fake-model"
+
+        async def complete(self, messages, tools):
+            question = messages[1]["content"]
+            if messages[-1]["role"] == "tool":
+                return _answer(f"Sources: [D/C/{question}]")
+            return _call(arguments={
+                "databaseId": "D", "containerId": "C", "property": "text", "searchPhrase": question,
+            })
+
+    client.app.state.chat_client = ConcurrentChat()
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        responses = list(pool.map(lambda question: client.post(
+            "/agentic_search", json={"query": question, "database": "D", "container": "C"}
+        ), ["one", "two"]))
+    assert all(response.status_code == 200 for response in responses)
+    assert [[document["id"] for document in response.json()["documents"]] for response in responses] == [["one"], ["two"]]
+
+
+@pytest.mark.parametrize("options, status", [
+    ({"query": "   "}, 422), ({"container": "C"}, 400),
+    ({"container_filters": {}}, 422), ({"overrides": {}}, 422),
+    ({"maxDocuments": 0}, 422), ({"maxDocuments": True}, 422),
+])
+def test_invalid_request_never_calls_model_or_toolkit(http, options, status):
+    client, toolkit = http
+    chat = _FakeChat([])
+    client.app.state.chat_client = chat
+    response = client.post("/agentic_search", json={"query": "question", **options})
+    assert response.status_code == status, response.text
+    assert chat.messages_seen == [] and toolkit.calls == []
+
+
+def test_missing_toolkit_returns_unavailable(http):
+    client, _ = http
+    client.app.state.toolkit = None
+    assert client.post("/agentic_search", json={"query": "question"}).status_code == 503
+    assert client.get("/health").status_code == 503
 
 
 def test_configured_llm_builds_chat_client():
@@ -186,8 +344,6 @@ def test_configured_llm_builds_chat_client():
 
 
 class _FakeIdentity:
-    """A stand-in async Azure credential that issues a fixed token."""
-
     def __init__(self) -> None:
         self.scopes: tuple[str, ...] = ()
         self.closed = False
@@ -211,29 +367,25 @@ def test_chat_client_signs_in_with_key_or_entra(monkeypatch, api_key):
         return Mock(close=AsyncMock())
 
     monkeypatch.setattr(chat_client, "AsyncOpenAI", fake_sdk)
-
-    with TestClient(_app(_settings(llm_api_key=api_key))) as http:
-        assert isinstance(http.app.state.chat_client, ChatClient)
+    with TestClient(_app(_settings(llm_api_key=api_key))):
         client_key = sdk_options["api_key"]
         if api_key is None:
             assert anyio.run(client_key) == "entra-token"
             assert identity.scopes == (server.LLM_TOKEN_SCOPE,)
         else:
             assert client_key == api_key
-
-    assert identity.closed is (api_key is None)
+    assert identity.closed
 
 
 def test_toolkit_client_signs_in_with_the_toolkit_app_and_one_credential(monkeypatch):
     created: list[_FakeIdentity] = []
 
-    def new_identity() -> _FakeIdentity:
+    def new_identity():
         created.append(_FakeIdentity())
         return created[-1]
 
     monkeypatch.setattr(server, "AsyncDefaultAzureCredential", new_identity)
-    opened: list[tuple[str, object]] = []
-    closed: list[bool] = []
+    opened, closed = [], []
 
     @asynccontextmanager
     async def fake_sessions(url, get_token):
@@ -242,167 +394,13 @@ def test_toolkit_client_signs_in_with_the_toolkit_app_and_one_credential(monkeyp
         closed.append(True)
 
     monkeypatch.setattr(server, "toolkit_sessions", fake_sessions)
-
-    with TestClient(_app(_settings(llm_api_key=None, toolkit_app_id="app-123"))) as http:
+    with TestClient(_app(_settings(llm_api_key=None))) as http:
         assert isinstance(http.app.state.toolkit, ToolkitClient)
         [(url, get_token)] = opened
         assert url == "http://127.0.0.1:8080/mcp"
         assert anyio.run(get_token) == "entra-token"
         assert created[0].scopes == ("api://app-123/.default",)
-
-    assert closed == [True]
-    assert len(created) == 1 and created[0].closed
-
-
-def test_toolkit_client_is_off_without_toolkit_app_id():
-    with TestClient(_app(_settings())) as http:
-        assert http.app.state.toolkit is None
-
-
-@pytest.mark.parametrize("container", [None, "C"])
-@pytest.mark.parametrize("limit, service_cap", [(1, 10), (50, 1), (8, 10)])
-def test_mcp_request_runs_agent_with_scope_filters_and_result_limit(
-    container, limit, service_cap
-):
-    settings = _settings(agent_max_documents=service_cap)
-    settings.cosmos_containers["C"].partition_key = "team-a"
-    settings.cosmos_containers["other"] = settings.cosmos_containers["C"].model_copy(
-        deep=True
-    )
-    names = [container] if container else list(settings.cosmos_containers)
-    targets = [ContainerTarget("D", name) for name in names]
-    retriever = Mock()
-    retriever.search.return_value = MultiSearchResult(
-        items=[_document(f"d{rank}", rank) for rank in range(10)], searched=targets
-    )
-    chat = _FakeChat([
-        _search_then_answer()[0], *_search_then_answer("battery recycling", "c2")
-    ])
-    filters = [{"kind": "equals", "path": "/tenant", "value": "team-a"}]
-    with TestClient(_app(settings)) as http:
-        http.app.state.chat_client = chat
-        http.app.state.retriever = retriever
-        response = http.post(
-            "/agentic_search",
-            json={
-                "query": "Find documents about recycling.",
-                "maxDocuments": limit,
-                "database": "D",
-                "container": container,
-                "container_filters": {name: filters for name in names},
-            },
-        )
-
-    assert response.status_code == 200, response.text
-    body = response.json()
-    assert body["answer"] == "the answer"
-    assert body["turns"] == 3 and body["terminal_reason"] == "stop"
-    assert len(body["documents"]) == min(limit, service_cap)
-    assert body["searched"] == [target._asdict() for target in targets]
-    assert retriever.search.call_count == 2
-    for call, query in zip(retriever.search.call_args_list, ["hi", "battery recycling"]):
-        requests = call.args[0]
-        assert list(requests) == targets
-        assert call.kwargs["limit"] == min(limit, service_cap)
-        for target in targets:
-            assert requests[target].query == query
-            assert requests[target].partition_key == "team-a"
-            assert requests[target].limit == min(limit, service_cap)
-            assert requests[target].filters[0].model_dump(mode="json") == filters[0]
-
-
-def test_failed_model_request_returns_bad_gateway():
-    with TestClient(_app(_settings())) as http:
-        http.app.state.chat_client = _FakeChat([
-            LlmTurn(
-                message={"role": "assistant", "content": ""},
-                error="Endpoint failed: private-key private-url",
-            )
-        ])
-        response = http.post("/agentic_search", json={"query": "Find recycling documents."})
-
-    assert response.status_code == 502, response.text
-    body = response.json()
-    assert body["error"] == "Model request failed."
-    assert body["terminal_reason"] == "error"
-    assert body["answer"] == "" and body["turns"] == 1
-    assert "private-" not in response.text
-
-
-def test_model_failure_after_search_keeps_documents_but_not_an_unfinished_answer():
-    search_turn = _search_then_answer()[0]
-    search_turn.message["content"] = "I will search before answering."
-    failed_turn = LlmTurn(
-        message={"role": "assistant", "content": ""}, error="private endpoint failure"
-    )
-    with TestClient(_app(_settings())) as http:
-        http.app.state.chat_client = _FakeChat([search_turn, failed_turn])
-        http.app.state.retriever = _FakeRetriever([_document("d1", 0, "Evidence.")])
-        response = http.post("/agentic_search", json={"query": "Find recycling documents."})
-
-    assert response.status_code == 502, response.text
-    body = response.json()
-    assert body["answer"] == ""
-    assert body["turns"] == 2 and body["terminal_reason"] == "error"
-    assert [document["retrieval_id"] for document in body["documents"]] == ["d1"]
-    assert "private" not in response.text
-
-
-@pytest.mark.parametrize("partial", [False, True])
-def test_agent_preserves_partial_and_complete_retrieval_failures(partial):
-    settings = _settings()
-    settings.cosmos_containers["other"] = settings.cosmos_containers["C"].model_copy(
-        deep=True
-    )
-    target, other = ContainerTarget("D", "C"), ContainerTarget("D", "other")
-    errors = {other: "Search failed."}
-    if not partial:
-        errors[target] = "Search failed."
-    retriever = Mock()
-    retriever.search.return_value = MultiSearchResult(
-        items=[_document("d1", 0)] if partial else [],
-        searched=[target] if partial else [],
-        errors=errors,
-    )
-    with TestClient(_app(settings)) as http:
-        http.app.state.chat_client = _FakeChat(_search_then_answer())
-        http.app.state.retriever = retriever
-        response = http.post("/agentic_search", json={"query": "Find recycling documents."})
-
-    assert response.status_code == (200 if partial else 500), response.text
-    body = response.json()
-    assert body["partial"] is partial
-    assert len(body["errors"]) == (1 if partial else 2)
-    assert body["searched"] == ([target._asdict()] if partial else [])
-    if partial:
-        assert body["answer"] == "the answer"
-        assert len(body["documents"]) == 1
-    else:
-        assert body["answer"] == "" and body["documents"] == []
-        assert body["error"] == "Search failed for all selected containers."
-
-
-@pytest.mark.parametrize(
-    "options, status",
-    [
-        ({"database": "unknown"}, 400),
-        ({"container": "unknown"}, 400),
-        ({"container_filters": {}}, 400),
-        ({"overrides": {"schema_override": {"text_paths": ["/other"]}}}, 400),
-        ({"maxDocuments": 0}, 422),
-        ({"maxDocuments": True}, 422),
-    ],
-)
-def test_invalid_mcp_request_never_calls_model_or_retriever(options, status):
-    chat, retriever = Mock(), Mock()
-    with TestClient(_app(_settings())) as http:
-        http.app.state.chat_client = chat
-        http.app.state.retriever = retriever
-        response = http.post("/agentic_search", json={"query": "recycling", **options})
-
-    assert response.status_code == status, response.text
-    chat.complete.assert_not_called()
-    retriever.search.assert_not_called()
+    assert closed == [True] and len(created) == 1 and created[0].closed
 
 
 def test_exhausted_sdk_retries_return_bad_gateway(monkeypatch):
@@ -415,28 +413,15 @@ def test_exhausted_sdk_retries_return_bad_gateway(monkeypatch):
     delay = AsyncMock()
     monkeypatch.setattr("openai._base_client.anyio.sleep", delay)
     transport = httpx.AsyncClient(transport=httpx.MockTransport(unavailable))
-    monkeypatch.setattr(
-        chat_client,
-        "AsyncOpenAI",
-        lambda **options: AsyncOpenAI(http_client=transport, **options),
-    )
+    monkeypatch.setattr(chat_client, "AsyncOpenAI", lambda **options: AsyncOpenAI(http_client=transport, **options))
     with TestClient(_app(_settings())) as http:
-        response = http.post("/agentic_search", json={"query": "Find recycling documents."})
-
-    assert len(requests) == 3
-    assert delay.call_count == 2
-    assert response.status_code == 502, response.text
-    assert response.json()["error"] == "Model request failed."
-    assert response.json()["turns"] == 1
+        response = http.post("/agentic_search", json={"query": "question"})
+    assert len(requests) == 3 and delay.await_count == 2
+    assert response.status_code == 502 and response.json()["error"] == "Model request failed."
     assert "private" not in response.text
 
 
 @pytest.mark.parametrize("path", ["/search", "/agent_search"])
-def test_removed_agent_routes_return_not_found(path):
-    chat = Mock()
-    with TestClient(_app(_settings())) as http:
-        http.app.state.chat_client = chat
-        response = http.post(path, json={"query": "Find recycling documents."})
-
-    assert response.status_code == 404
-    chat.complete.assert_not_called()
+def test_removed_agent_routes_return_not_found(http, path):
+    client, _ = http
+    assert client.post(path, json={"query": "question"}).status_code == 404

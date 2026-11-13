@@ -22,6 +22,7 @@ def _environment(monkeypatch):
         "COSMOS_DATABASE": "D",
         "LLM_BASE_URL": "https://model.example.com/v1",
         "LLM_MODEL": "test-model",
+        "TOOLKIT_APP_ID": "test-toolkit",
         "COSMOS_CONTAINERS": json.dumps(
             {
                 "C": {
@@ -68,7 +69,7 @@ def test_settings_from_environment(monkeypatch):
 
 @pytest.mark.parametrize(
     "name",
-    ["ACCOUNT_URI", "COSMOS_DATABASE", "COSMOS_CONTAINERS"],
+    ["ACCOUNT_URI", "COSMOS_DATABASE", "COSMOS_CONTAINERS", "TOOLKIT_APP_ID"],
 )
 def test_required_settings_fail_before_launch(monkeypatch, name):
     _environment(monkeypatch)
@@ -96,6 +97,7 @@ _YAML_CONFIG = (
     "cosmos_database: FILEDB\n"
     "llm_base_url: https://model.example.com/v1\n"
     "llm_model: test-model\n"
+    "toolkit_app_id: test-toolkit\n"
     "cosmos_containers:\n"
     "  C:\n"
     "    cosmos_schema:\n"
@@ -118,6 +120,7 @@ def test_get_config_reads_yaml_file(monkeypatch, tmp_path):
 def test_example_yaml_loads_multiple_containers(monkeypatch):
     example = Path(__file__).resolve().parents[2] / "config.example.yaml"
     monkeypatch.setenv("COSMOS_RETRIEVER_CONFIG_FILE", str(example))
+    monkeypatch.setenv("TOOLKIT_APP_ID", "test-toolkit")
 
     settings = get_config()
 
@@ -167,6 +170,9 @@ def test_environment_fills_field_absent_from_yaml(monkeypatch, tmp_path):
         {"cosmos_credential": "unknown"},
         {"cosmos_containers": {"C": {"cosmos_schema": {"item_id_path": "/id"}}}},
         {"query_engine": {"max_concurrency": 0}},
+        {"toolkit_app_id": None},
+        {"toolkit_app_id": ""},
+        {"toolkit_app_id": "   "},
         {"typo": True},
     ],
 )
@@ -176,6 +182,7 @@ def test_settings_reject_invalid_configuration(options):
         "cosmos_database": "D",
         "llm_base_url": "https://model.example.com/v1",
         "llm_model": "test-model",
+        "toolkit_app_id": "test-toolkit",
         "cosmos_containers": {
             "C": {
                 "cosmos_schema": {
@@ -196,6 +203,7 @@ def test_settings_require_explicit_selection_for_multiple_fields():
         "cosmos_database": "D",
         "llm_base_url": "https://model.example.com/v1",
         "llm_model": "test-model",
+        "toolkit_app_id": "test-toolkit",
         "cosmos_containers": {
             "C": {
                 "cosmos_schema": {
@@ -266,6 +274,7 @@ def test_serve_command(monkeypatch, arguments, host, port):
         cosmos_database="D",
         llm_base_url="https://model.example.com/v1",
         llm_model="test-model",
+        toolkit_app_id="test-toolkit",
         cosmos_containers={
             "C": {
                 "cosmos_schema": {

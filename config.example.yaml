@@ -13,6 +13,9 @@ llm_params: {}
 agent_max_turns: 6
 agent_max_documents: 10
 
+# The deploy script sets TOOLKIT_APP_ID; local runs must supply it explicitly.
+toolkit_mcp_url: http://127.0.0.1:8080/mcp
+
 # How toolkit results are trimmed before the agent reads them. Search results
 # shorten text values to this many characters (the agent can ask for full text).
 tool_result_text_limit: 512

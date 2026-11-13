@@ -337,6 +337,7 @@ def service_settings(
         cosmos_credential=credential,
         llm_base_url="https://model.example.com/v1",
         llm_model="test-model",
+        toolkit_app_id="fixture-toolkit",
         cosmos_containers={
             fixture.name: {
                 "cosmos_schema": fixture.schema,

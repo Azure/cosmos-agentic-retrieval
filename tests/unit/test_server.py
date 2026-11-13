@@ -58,6 +58,7 @@ def _settings(**options):
             "cosmos_database": "D",
             "llm_base_url": "https://model.example.com/v1",
             "llm_model": "test-model",
+            "toolkit_app_id": "test-toolkit",
             # A model key keeps the model from creating its own Azure credential here.
             "llm_api_key": "test-key",
             "cosmos_containers": {

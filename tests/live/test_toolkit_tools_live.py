@@ -6,7 +6,7 @@ longer takes one of the arguments we offer (or takes it with another type), or
 requires an argument we don't offer. Run it when the toolkit changes:
 
     RUN_TOOLKIT_LIVE=1 TOOLKIT_TEST_URL=https://<app>/mcp TOOLKIT_TEST_APP_ID=<id> \
-        python -m pytest tests/live/test_toolkit_tools.py -q
+        python -m pytest tests/live/test_toolkit_tools_live.py -q
 
 ``TOOLKIT_TEST_APP_ID`` is the toolkit's Entra app client ID; the test signs in
 with `az login`. Leave it out for a local toolkit running without sign-in.
