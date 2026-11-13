@@ -1,9 +1,10 @@
 """Run a benchmark collection's questions through agentic search and score the answers.
 
 By default the service runs inside this process against the corpus loaded by
-load_corpus_to_cosmos.py, signing in with `az login`. With --toolkit-url, each
-question instead goes to a deployed MCP toolkit's agentic_search tool, and the
-deployment's own retriever settings apply. The judge model, and the agent model
+load_corpus_to_cosmos.py, signing in with `az login`; its agent searches through
+the MCP toolkit at TOOLKIT_MCP_URL (default http://127.0.0.1:8080/mcp). With
+--toolkit-url, each question instead goes to a deployed MCP toolkit's
+agentic_search tool, and the deployment's own retriever settings apply. The judge model, and the agent model
 for in-process runs, come from LLM_BASE_URL, LLM_MODEL and LLM_API_KEY. Without
 LLM_API_KEY, the judge model is called with an Entra token from `az login`.
 
@@ -14,7 +15,7 @@ missing questions of an earlier run, with that run's settings, into a new file.
 
 Examples:
     python tests/benchmarks/run.py --account-uri https://<account>.documents.azure.com:443/ \
-        --collection hipporag2 --container hipporag2-full --questions-per-dataset 100
+        --toolkit-app-id <entra-app-client-id> --collection hipporag2 --container hipporag2-full --questions-per-dataset 100
     python tests/benchmarks/run.py --toolkit-url https://<app>.azurecontainerapps.io/mcp \
         --toolkit-app-id <entra-app-client-id> --collection hipporag2 --container hipporag2-full
     python tests/benchmarks/run.py --resume-file .live-data/benchmark-runs/<run>.json
@@ -116,12 +117,19 @@ def start_in_process_search(stack: ExitStack, settings: dict[str, Any]) -> Searc
                 "search_text_fields": ["/title", "/text"],
             }
         },
+        toolkit_app_id=settings["toolkit_app_id"],
     )
     http = stack.enter_context(TestClient(create_app(config)))
 
     def search(query: str) -> dict[str, Any]:
         response = http.post(
-            "/agentic_search", json={"query": query, "maxDocuments": MAX_DOCUMENTS}
+            "/agentic_search",
+            json={
+                "query": query,
+                "maxDocuments": MAX_DOCUMENTS,
+                "database": settings["database"],
+                "container": settings["container"],
+            },
         )
         body = response.json()
         if response.status_code != 200:
@@ -176,9 +184,17 @@ def start_toolkit_search(settings: dict[str, Any]) -> SearchFn:
 
 
 def answer_and_score_question(
-    search: SearchFn, judge: OpenAI, judge_model: str, question: Question
+    search: SearchFn,
+    judge: OpenAI,
+    judge_model: str,
+    titles_by_id: dict[str, str],
+    question: Question,
 ) -> dict[str, Any]:
-    """Run one question and score it, recording any failure instead of raising."""
+    """Run one question and score it, recording any failure instead of raising.
+
+    Returned documents are matched to corpus passages by ID, so retrieval is scored
+    the same whichever document fields the agent's searches returned.
+    """
     record: dict[str, Any] = {
         "dataset": question.dataset,
         "question_id": question.id,
@@ -192,7 +208,11 @@ def answer_and_score_question(
         if "error" in body:
             return {**record, "status": "error", "error": str(body["error"])}
         prediction = body.get("answer") or ""
-        titles = [d["text_fields"].get("/title", "") for d in body.get("documents", [])]
+        titles = [
+            titles_by_id[d["id"]]
+            for d in body.get("documents", [])
+            if d.get("id") in titles_by_id
+        ]
         if prediction:
             judge_score, judge_tokens = judge_answer_with_model(
                 judge, judge_model, question.question, question.answers, prediction
@@ -339,7 +359,7 @@ def main() -> None:
     parser.add_argument("--questions-per-dataset", type=int, help="questions sampled from each dataset (default: all)")
     parser.add_argument("--seed", type=int, help=f"random seed for sampling questions (default: {DEFAULTS['seed']})")
     parser.add_argument("--toolkit-url", help="a deployed MCP toolkit's /mcp URL, to run through the toolkit instead")
-    parser.add_argument("--toolkit-app-id", help="client ID of the toolkit's Entra app, used to sign in to the toolkit")
+    parser.add_argument("--toolkit-app-id", help="client ID of the toolkit's Entra app, used to sign in to the toolkit; required in both modes")
     parser.add_argument("--resume-file", type=Path, help="an earlier run's file; reruns only its failed or missing questions")
     parser.add_argument("--output-file", type=Path, help="where to write this run (default: .live-data/benchmark-runs/<collection>-<time>.json)")
     parser.add_argument("--workers", type=int, default=4, help="number of questions run in parallel (default: %(default)s)")
@@ -364,8 +384,8 @@ def main() -> None:
             parser.error("--container is required")
         if (settings["account_uri"] is None) == (settings["toolkit_url"] is None):
             parser.error("give either --account-uri or --toolkit-url")
-        if settings["toolkit_url"] and not settings["toolkit_app_id"]:
-            parser.error("--toolkit-url needs --toolkit-app-id")
+        if not settings["toolkit_app_id"]:
+            parser.error("--toolkit-app-id is required")
         kept = []
 
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -374,6 +394,7 @@ def main() -> None:
         parser.error(f"{output} already exists")
 
     collection = COLLECTIONS[settings["collection"]]()
+    titles_by_id = {p.id: p.title for p in collection.read_merged_corpus_passages()}
     questions = sample_questions_per_dataset(
         collection.read_questions(), settings["questions_per_dataset"], settings["seed"]
     )
@@ -404,7 +425,9 @@ def main() -> None:
         pool = ThreadPoolExecutor(args.workers)
         try:
             futures = [
-                pool.submit(answer_and_score_question, search, judge, judge_model, q)
+                pool.submit(
+                    answer_and_score_question, search, judge, judge_model, titles_by_id, q
+                )
                 for q in pending
             ]
             for future in tqdm(as_completed(futures), total=len(futures), desc="Answering"):
