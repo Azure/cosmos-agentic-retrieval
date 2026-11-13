@@ -12,7 +12,6 @@ import anyio
 import httpx
 import pytest
 from azure.core.credentials import AccessToken
-from azure.cosmos import ContainerProxy
 from fastapi.testclient import TestClient
 from mcp.server.fastmcp import FastMCP
 from mcp.shared.memory import create_connected_server_and_client_session
@@ -25,8 +24,6 @@ from cosmos_agentic_retriever.agent.loop import LlmTurn, ModelError, TokenUsage
 from cosmos_agentic_retriever.agent.tool_contracts import ToolCall
 from cosmos_agentic_retriever.agent.toolkit_client import ToolkitClient
 from cosmos_agentic_retriever.config import RetrieverConfig
-from cosmos_agentic_retriever.query_engine import CosmosExecutor, QueryEngineConfig
-from cosmos_agentic_retriever.query_engine.retriever import CorpusRetriever
 from cosmos_agentic_retriever.server import create_app
 
 
@@ -94,28 +91,14 @@ def _settings(**options) -> RetrieverConfig:
     options.setdefault("llm_api_key", "test-key")
     options.setdefault("toolkit_app_id", "app-123")
     return RetrieverConfig(
-        account_uri="https://example.documents.azure.com",
-        cosmos_database="D",
         llm_base_url="https://model.example.com/v1",
         llm_model="test-model",
-        cosmos_containers={"C": {"cosmos_schema": {
-            "item_id_path": "/id", "partition_key_paths": ["/tenant"], "text_paths": ["/text"],
-        }}},
         **options,
     )
 
 
 def _app(settings: RetrieverConfig):
-    retrievers = {}
-    for name, config in settings.cosmos_containers.items():
-        container = Mock(spec=ContainerProxy)
-        container.query_items.side_effect = lambda **kwargs: iter([])
-        retrievers[name] = CorpusRetriever(
-            container=container, schema=config.cosmos_schema,
-            partition_policy=config.partition_policy,
-            executor=CosmosExecutor(config=QueryEngineConfig()),
-        )
-    return create_app(settings, retrievers=retrievers)
+    return create_app(settings)
 
 
 @pytest.fixture
@@ -154,7 +137,6 @@ def test_agent_search_runs_toolkit_tools_and_returns_full_evidence(http):
     client, toolkit = http
     chat = _FakeChat([_call(), _answer("the answer\nSources: [D/C/d1]")])
     client.app.state.chat_client = chat
-    client.app.state.retriever = Mock(search=Mock(side_effect=AssertionError("legacy search used")))
 
     response = client.post("/agentic_search", json={"query": "what is up?"})
 

@@ -1,8 +1,8 @@
 """Run a benchmark collection's questions through agentic search and score the answers.
 
-By default the service runs inside this process against the corpus loaded by
-load_corpus_to_cosmos.py, signing in with `az login`; its agent searches through
-the MCP toolkit at TOOLKIT_MCP_URL (default http://127.0.0.1:8080/mcp). With
+By default the service runs inside this process, and its agent searches the
+corpus loaded by load_corpus_to_cosmos.py through the MCP toolkit at
+TOOLKIT_MCP_URL (default http://127.0.0.1:8080/mcp). With
 --toolkit-url, each question instead goes to a deployed MCP toolkit's
 agentic_search tool, and the deployment's own retriever settings apply. The judge model, and the agent model
 for in-process runs, come from LLM_BASE_URL, LLM_MODEL and LLM_API_KEY. Without
@@ -14,8 +14,8 @@ finished questions are still written. --resume-file reruns only the failed or
 missing questions of an earlier run, with that run's settings, into a new file.
 
 Examples:
-    python tests/benchmarks/run.py --account-uri https://<account>.documents.azure.com:443/ \
-        --toolkit-app-id <entra-app-client-id> --collection hipporag2 --container hipporag2-full --questions-per-dataset 100
+    python tests/benchmarks/run.py --toolkit-app-id <entra-app-client-id> \
+        --collection hipporag2 --container hipporag2-full --questions-per-dataset 100
     python tests/benchmarks/run.py --toolkit-url https://<app>.azurecontainerapps.io/mcp \
         --toolkit-app-id <entra-app-client-id> --collection hipporag2 --container hipporag2-full
     python tests/benchmarks/run.py --resume-file .live-data/benchmark-runs/<run>.json
@@ -73,7 +73,6 @@ MAX_DOCUMENTS = 10
 RUN_SETTINGS = (
     "collection",
     "container",
-    "account_uri",
     "database",
     "questions_per_dataset",
     "seed",
@@ -103,22 +102,7 @@ def sample_questions_per_dataset(
 
 def start_in_process_search(stack: ExitStack, settings: dict[str, Any]) -> SearchFn:
     """Start the service in this process and send questions to its /agentic_search."""
-    config = RetrieverConfig(
-        account_uri=settings["account_uri"],
-        cosmos_database=settings["database"],
-        cosmos_credential="azure_cli",
-        cosmos_containers={
-            settings["container"]: {
-                "cosmos_schema": {
-                    "item_id_path": "/id",
-                    "partition_key_paths": ["/id"],
-                    "text_paths": ["/title", "/text"],
-                },
-                "search_text_fields": ["/title", "/text"],
-            }
-        },
-        toolkit_app_id=settings["toolkit_app_id"],
-    )
+    config = RetrieverConfig(toolkit_app_id=settings["toolkit_app_id"])
     http = stack.enter_context(TestClient(create_app(config)))
 
     def search(query: str) -> dict[str, Any]:
@@ -354,11 +338,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--collection", choices=sorted(COLLECTIONS), help="benchmark collection whose questions to run")
     parser.add_argument("--container", help="Cosmos container holding the collection's corpus")
-    parser.add_argument("--account-uri", help="Cosmos DB account URI, to run the service in this process")
     parser.add_argument("--database", help=f"database holding the container (default: {DEFAULTS['database']})")
     parser.add_argument("--questions-per-dataset", type=int, help="questions sampled from each dataset (default: all)")
     parser.add_argument("--seed", type=int, help=f"random seed for sampling questions (default: {DEFAULTS['seed']})")
-    parser.add_argument("--toolkit-url", help="a deployed MCP toolkit's /mcp URL, to run through the toolkit instead")
+    parser.add_argument("--toolkit-url", help="a deployed MCP toolkit's /mcp URL, to send questions to its agentic_search tool instead of running the service in this process (default: run in this process)")
     parser.add_argument("--toolkit-app-id", help="client ID of the toolkit's Entra app, used to sign in to the toolkit; required in both modes")
     parser.add_argument("--resume-file", type=Path, help="an earlier run's file; reruns only its failed or missing questions")
     parser.add_argument("--output-file", type=Path, help="where to write this run (default: .live-data/benchmark-runs/<collection>-<time>.json)")
@@ -382,8 +365,6 @@ def main() -> None:
             parser.error("--collection is required")
         if settings["container"] is None:
             parser.error("--container is required")
-        if (settings["account_uri"] is None) == (settings["toolkit_url"] is None):
-            parser.error("give either --account-uri or --toolkit-url")
         if not settings["toolkit_app_id"]:
             parser.error("--toolkit-app-id is required")
         kept = []

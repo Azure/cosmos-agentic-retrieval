@@ -23,9 +23,9 @@
     4. Adds the "retriever" container to the app, or updates it if it exists,
        and passes it the toolkit's Entra app ID (TOOLKIT_APP_ID).
 
-    The service authenticates with Cosmos DB, the chat model and the toolkit with the
-    app's managed identity, so the configuration file must not contain keys
-    (cosmos_key or llm_api_key).
+    The service authenticates with the chat model and the toolkit with the
+    app's managed identity, so the configuration file must not contain a key
+    (llm_api_key).
 
 .EXAMPLE
     .\scripts\Add-Retriever-To-Toolkit.ps1 -ResourceGroup my-rg -ContainerAppName my-mcp-toolkit -ConfigFile .\config.deploy.yaml -ModelResourceId /subscriptions/.../accounts/my-foundry
@@ -68,8 +68,8 @@ $ErrorActionPreference = "Stop"
 
 # Check the configuration has no keys: it is copied into the image, where anyone who can pull the image can read it
 $configPath = (Resolve-Path $ConfigFile).Path
-if (Select-String -Path $configPath -Pattern '^\s*(cosmos_key|llm_api_key)\s*:' -Quiet) {
-    throw "'$ConfigFile' contains cosmos_key or llm_api_key. Remove them; the service signs in with the app's managed identity."
+if (Select-String -Path $configPath -Pattern '^\s*llm_api_key\s*:' -Quiet) {
+    throw "'$ConfigFile' contains llm_api_key. Remove it; the service signs in with the app's managed identity."
 }
 
 # Read the toolkit app, and check it is a toolkit app with a managed identity

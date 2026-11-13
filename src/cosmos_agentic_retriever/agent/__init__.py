@@ -1,10 +1,8 @@
-"""A search agent that answers questions from the configured cosmosDB
-containers.
+"""A search agent that answers questions with the MCP toolkit's tools.
 
-The agent runs a short chat loop: it asks a language model what to search for,
-runs the search, shows the model the results, and repeats until the model answers
-or a turn cap is hit. It searches with the ``full_text_search`` tool, backed by the
-in-process multi-container retriever.
+The agent runs a short chat loop: it asks a language model which tool to call,
+runs the tool, shows the model the results, and repeats until the model answers
+or a turn cap is hit.
 """
 
 from cosmos_agentic_retriever.agent.chat_client import ChatClient
@@ -13,7 +11,6 @@ from cosmos_agentic_retriever.agent.loop import (
     LlmTurn,
     run_agent_search,
 )
-from cosmos_agentic_retriever.agent.search_tool import make_full_text_search_tool
 from cosmos_agentic_retriever.agent.tool_contracts import (
     InvalidToolCall,
     Tool,
@@ -33,6 +30,5 @@ __all__ = [
     "ToolCallResponse",
     "ToolExecutionResult",
     "execute_tool_call",
-    "make_full_text_search_tool",
     "run_agent_search",
 ]

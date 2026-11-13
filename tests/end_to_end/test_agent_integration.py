@@ -41,34 +41,29 @@ pytestmark = [
 
 
 @pytest.fixture(scope="session")
-def agent_settings(live_settings):
-    """Use the prepared containers and the explicitly configured live model."""
-    values = dict(live_settings)
-    values.update(
+def agent_settings():
+    """The explicitly configured live model and toolkit."""
+    return RetrieverConfig(
         llm_base_url=os.environ["COSMOS_TEST_LLM_BASE_URL"],
         llm_model=os.environ["COSMOS_TEST_LLM_MODEL"],
         llm_api_key=os.environ.get("COSMOS_TEST_LLM_API_KEY"),
         toolkit_mcp_url=os.environ["TOOLKIT_TEST_URL"],
         toolkit_app_id=os.environ["TOOLKIT_TEST_APP_ID"],
     )
-    return RetrieverConfig.model_validate(values)
 
 
 @pytest.fixture(scope="session")
-def agent_http(agent_settings, synthetic_settings):
-    settings = agent_settings.model_copy(
-        update={"cosmos_containers": synthetic_settings.cosmos_containers}, deep=True
-    )
-    with TestClient(create_app(settings)) as client:
+def agent_http(agent_settings):
+    with TestClient(create_app(agent_settings)) as client:
         yield client
 
 
-def test_agent_search_answers_with_supporting_documents(agent_http, agent_settings):
+def test_agent_search_answers_with_supporting_documents(agent_http, live_database):
     response = agent_http.post(
         "/agentic_search",
         json={
             "query": "What do the documents say about battery recycling?",
-            "database": agent_settings.cosmos_database,
+            "database": live_database,
         },
     )
     assert response.status_code == 200, response.text
@@ -110,7 +105,7 @@ def agent_service_url(agent_settings):
     os.environ.get("RUN_COSMOS_MCP_LIVE") != "1",
     reason="set RUN_COSMOS_MCP_LIVE=1 to run the .NET MCP integration tests",
 )
-def test_agent_search_through_mcp(agent_service_url, agent_settings):
+def test_agent_search_through_mcp(agent_service_url, live_database):
     """Run real MCP requests through .NET, Python, the model, and Cosmos."""
     dotnet = shutil.which("dotnet")
     assert dotnet is not None, "The .NET 9 SDK must be on PATH."
@@ -137,7 +132,7 @@ def test_agent_search_through_mcp(agent_service_url, agent_settings):
     environment.update(
         COSMOS_RETRIEVER_URL=agent_service_url,
         COSMOS_RETRIEVER_TIMEOUT_S="240",
-        COSMOS_TEST_DATABASE=agent_settings.cosmos_database,
+        COSMOS_TEST_DATABASE=live_database,
         Logging__LogLevel__Default="Critical",
     )
     result = subprocess.run(

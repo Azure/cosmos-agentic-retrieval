@@ -1,8 +1,8 @@
 # Azure Cosmos DB Agentic Retrieval (Private Preview)
 
-This repository provides an agentic-search service over configured Cosmos DB
-containers. Users can ask an agent a natural-language question, which searches
-the Cosmos DB containers and returns the answer with its supporting documents.
+This repository provides an agentic-search service for Cosmos DB. Users can ask
+an agent a natural-language question; the agent searches with the Azure Cosmos
+DB MCP Toolkit's tools and returns the answer with its supporting documents.
 
 This feature is exposed as the `agentic_search` tool of the Azure Cosmos DB MCP
 Toolkit. This feature is currently in preview.
@@ -32,26 +32,16 @@ cd cosmos-agentic-retrieval
 Copy-Item config.example.yaml config.deploy.yaml
 ```
 
-In `config.deploy.yaml`, fill in your account, database, model, and containers.
-The following are required:
+In `config.deploy.yaml`, fill in your model. The following are required:
 
 ```yaml
-account_uri: https://YOUR-ACCOUNT.documents.azure.com:443/
-cosmos_database: YOUR-DATABASE
 llm_base_url: https://YOUR-ENDPOINT/openai/v1
 llm_model: YOUR-MODEL
-cosmos_containers:
-  YOUR-CONTAINER:
-    cosmos_schema:
-      item_id_path: /id
-      partition_key_paths: ["/YOUR-PARTITION-KEY"]
-      text_paths: ["/YOUR-TEXT-FIELD"]
 ```
 
-The service accesses Cosmos DB, the retreival model and the toolkit with the
-app's managed identity.  It is built into the service's image; the script
-refuses a file with
-`cosmos_key` or `llm_api_key`.
+The service calls the model and the toolkit with the app's managed identity.
+The configuration is built into the service's image; the script refuses a file
+with `llm_api_key`.
 
 ### Step 3: Add the service to the toolkit app
 
