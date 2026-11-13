@@ -1,16 +1,15 @@
-"""Trim toolkit results before the agent reads them.
+"""Keep toolkit results from unnecessarily filling the search model's context.
 
-The toolkit's tools return whole Cosmos DB documents as JSON, including stored
-embeddings, Cosmos DB system fields, and full text. That costs the agent's model
-tokens without helping it answer. `trim_json_text` trims a JSON result:
+The toolkit serves general-purpose clients and can return entire Cosmos documents,
+including large embedding arrays and system fields. Feeding every field into the
+search model spends tokens and leaves less room for useful evidence. This module
+adapts those results without changing the toolkit or duplicating its search logic.
 
-- A list of at least `min_vector_dim` numbers is an embedding; it is replaced by
-  a short marker, so the agent still sees which field holds the vector.
-- Fields named in `dropped_fields` are removed wherever they appear. By default
-  these are Cosmos DB's internal system fields.
-- With ``shorten_text``, text longer than `text_limit` characters is shortened.
-
-Text that is not JSON is returned unchanged.
+ToolkitToolAdapter uses short previews for searches; the agent can request full
+text with returnDocuments or read by ID. SearchEvidence applies the same cleanup
+without shortening text, so the caller can still receive full supporting text.
+Vector markers preserve field names for later vector searches. These are output
+formatting rules, not access controls; the toolkit still returns the original data.
 """
 
 from __future__ import annotations
@@ -24,42 +23,64 @@ DEFAULT_DROPPED_FIELDS = ("_rid", "_self", "_etag", "_attachments")
 
 @dataclass(frozen=True)
 class TrimRules:
-    """How tool results are trimmed; the defaults match the service's settings."""
+    """Configurable output policy rather than assumptions about one container's schema.
+
+    min_vector_dim is a heuristic: long numeric arrays may be embeddings, while
+    short arrays may be useful coordinates or measurements. Operators can adjust
+    the threshold and dropped field names to fit their data.
+    """
 
     text_limit: int = 512
     min_vector_dim: int = 128
     dropped_fields: frozenset[str] = field(default_factory=lambda: frozenset(DEFAULT_DROPPED_FIELDS))
 
 
-def _is_vector(value: list[Any], rules: TrimRules) -> bool:
-    return len(value) >= rules.min_vector_dim and all(
-        isinstance(item, (int, float)) and not isinstance(item, bool) for item in value
-    )
+class ResultTrimmer:
+    """Apply one policy consistently to search previews, full reads and evidence.
 
+    Results are copied, not edited in place, so shortening what the model sees
+    cannot accidentally shorten the evidence kept for the caller.
+    """
 
-def trim_value(value: Any, rules: TrimRules, *, shorten_text: bool) -> Any:
-    """Return a trimmed copy of a parsed JSON value."""
-    if isinstance(value, dict):
-        return {
-            key: trim_value(item, rules, shorten_text=shorten_text)
-            for key, item in value.items()
-            if key not in rules.dropped_fields
-        }
-    if isinstance(value, list):
-        if _is_vector(value, rules):
-            return f"[{len(value)}-dimension vector omitted]"
-        return [trim_value(item, rules, shorten_text=shorten_text) for item in value]
-    if shorten_text and isinstance(value, str) and len(value) > rules.text_limit:
-        hidden = len(value) - rules.text_limit
-        return f"{value[: rules.text_limit]}… [{hidden} more characters]"
-    return value
+    def __init__(self, rules: TrimRules) -> None:
+        self._rules = rules
 
+    def trim_value(self, value: Any, *, shorten_text: bool) -> Any:
+        """Clean nested fields without requiring a container-specific field map.
 
-def trim_json_text(text: str, rules: TrimRules, *, shorten_text: bool) -> str:
-    """Trim a JSON result and return it as compact JSON; other text is unchanged."""
-    try:
-        parsed = json.loads(text)
-    except json.JSONDecodeError:
-        return text
-    trimmed = trim_value(parsed, rules, shorten_text=shorten_text)
-    return json.dumps(trimmed, ensure_ascii=False, separators=(",", ":"))
+        shorten_text=False retains full text for reads and evidence; configured
+        field removal and vector replacement still apply.
+        """
+        if isinstance(value, dict):
+            return {
+                key: self.trim_value(item, shorten_text=shorten_text)
+                for key, item in value.items()
+                if key not in self._rules.dropped_fields
+            }
+        if isinstance(value, list):
+            if self._is_vector(value):
+                return f"[{len(value)}-dimension vector omitted]"
+            return [self.trim_value(item, shorten_text=shorten_text) for item in value]
+        if shorten_text and isinstance(value, str) and len(value) > self._rules.text_limit:
+            hidden = len(value) - self._rules.text_limit
+            return f"{value[: self._rules.text_limit]}… [{hidden} more characters]"
+        return value
+
+    def trim_json_text(self, text: str, *, shorten_text: bool) -> str:
+        """Adapt the toolkit's JSON-string replies to the agent's text observations.
+
+        Non-JSON replies pass through so a diagnostic is not lost or disguised
+        as an empty search result. Compact JSON avoids unnecessary whitespace.
+        """
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            return text
+        trimmed = self.trim_value(parsed, shorten_text=shorten_text)
+        return json.dumps(trimmed, ensure_ascii=False, separators=(",", ":"))
+
+    def _is_vector(self, value: list[Any]) -> bool:
+        """Use a size/type heuristic because schema discovery does not label embeddings."""
+        return len(value) >= self._rules.min_vector_dim and all(
+            isinstance(item, (int, float)) and not isinstance(item, bool) for item in value
+        )

@@ -45,6 +45,7 @@ def test_settings_from_environment(monkeypatch):
     monkeypatch.setenv("QUERY_ENGINE", '{"max_concurrency":2}')
     monkeypatch.setenv("COSMOS_KEY", "test-secret")
     monkeypatch.setenv("COSMOS_CREDENTIAL", "default")
+    monkeypatch.setenv("LLM_MAX_RETRIES", "4")
     monkeypatch.setenv("HOST", "127.0.0.2")
     monkeypatch.setenv("PORT", "9100")
     monkeypatch.setenv("LOG_LEVEL", "warning")
@@ -57,6 +58,7 @@ def test_settings_from_environment(monkeypatch):
     assert settings.cosmos_key.get_secret_value() == "test-secret"
     assert "test-secret" not in repr(settings)
     assert settings.cosmos_credential == "default"
+    assert settings.llm_max_retries == 4
     assert (settings.host, settings.port, settings.log_level) == (
         "127.0.0.2",
         9100,
@@ -170,6 +172,7 @@ def test_environment_fills_field_absent_from_yaml(monkeypatch, tmp_path):
         {"cosmos_credential": "unknown"},
         {"cosmos_containers": {"C": {"cosmos_schema": {"item_id_path": "/id"}}}},
         {"query_engine": {"max_concurrency": 0}},
+        {"llm_max_retries": -1},
         {"toolkit_app_id": None},
         {"toolkit_app_id": ""},
         {"toolkit_app_id": "   "},

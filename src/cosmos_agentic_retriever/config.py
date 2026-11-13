@@ -90,6 +90,7 @@ class RetrieverConfig(BaseSettings):
     # Without a key, the model is called with an Entra token from DefaultAzureCredential.
     llm_api_key: SecretStr | None = None
     llm_params: dict[str, Any] = Field(default_factory=dict)
+    llm_max_retries: int = Field(default=6, ge=0)
     agent_max_turns: int = Field(default=6, ge=1, le=50)
     agent_max_documents: int = Field(default=10, ge=1, le=50)
     # Default: the toolkit container in the same Container App.

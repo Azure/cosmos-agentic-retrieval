@@ -32,7 +32,11 @@ _logger = structlog.get_logger(__name__)
 
 
 class BearerAuth(httpx.Auth):
-    """Add a fresh bearer token from ``get_token`` to every request."""
+    """Resolve a valid token per request so pooled HTTP connections outlive token expiry.
+
+    Azure's token provider handles caching and renewal; this does not force a
+    new Entra token request for every tool call.
+    """
 
     def __init__(self, get_token: Callable[[], Awaitable[str]]) -> None:
         self._get_token = get_token
@@ -48,7 +52,11 @@ class BearerAuth(httpx.Auth):
 async def toolkit_sessions(
     url: str, get_token: Callable[[], Awaitable[str]], *, timeout: float = 120.0
 ) -> AsyncIterator[SessionFactory]:
-    """Yield a factory of MCP sessions to ``url`` that share one HTTP client."""
+    """Share the service's HTTP pool without sharing MCP failure or cancellation state.
+
+    Opening a session is deferred until a tool is called, so toolkit startup
+    order does not block service startup. Exiting this context closes the pool.
+    """
     async with httpx.AsyncClient(auth=BearerAuth(get_token), timeout=timeout) as http:
 
         @asynccontextmanager
@@ -63,34 +71,23 @@ async def toolkit_sessions(
         yield open_session
 
 
-def _to_result(reply: types.CallToolResult) -> ToolExecutionResult:
-    """Join the reply's text; a server-reported failure becomes the error."""
-    parts = [
-        item.text if isinstance(item, types.TextContent) else f"[{item.type} content omitted]"
-        for item in reply.content
-    ]
-    text = "\n".join(parts)
-    if reply.isError:
-        return ToolExecutionResult(content="", error=text or "The tool call failed.")
-    return ToolExecutionResult(content=text)
-
-
-def _root_cause(exc: BaseException) -> BaseException:
-    """The first underlying error inside nested exception groups."""
-    while isinstance(exc, BaseExceptionGroup) and exc.exceptions:
-        exc = exc.exceptions[0]
-    return exc
-
-
 class ToolkitClient:
-    """Call toolkit tools by name, each over its own MCP session, within a time limit."""
+    """Hide MCP transport details behind tool calls without coupling users' failures.
+
+    Every operation owns its session and timeout. Concurrent questions can share
+    this client and its underlying HTTP pool without sharing an MCP session.
+    """
 
     def __init__(self, open_session: SessionFactory, *, call_timeout: float = 120.0) -> None:
         self._open_session = open_session
         self._call_timeout = call_timeout
 
     async def call_tool(self, name: str, arguments: dict[str, Any]) -> ToolExecutionResult:
-        """Call a toolkit tool; a failure or timeout becomes the result's error."""
+        """Report transport failures as observations the agent can act on, not no matches.
+
+        The time limit includes session initialization, the call and cleanup.
+        Failures are not automatically replayed here; retry is left to the agent.
+        """
         try:
             with anyio.fail_after(self._call_timeout):
                 async with self._open_session() as session:
@@ -101,15 +98,15 @@ class ToolkitClient:
                 content="", error=f"The toolkit did not answer within {self._call_timeout:g} seconds."
             )
         except Exception as exc:
-            cause = _root_cause(exc)
+            cause = self._root_cause(exc)
             _logger.warning("toolkit_call_failed", tool=name, error=repr(cause))
             return ToolExecutionResult(
                 content="", error=f"The toolkit call failed: {type(cause).__name__}: {cause}"
             )
-        return _to_result(reply)
+        return self._to_result(reply)
 
     async def list_tools(self) -> list[types.Tool]:
-        """Read every page of the toolkit's tool list."""
+        """Support contract checks against our written definitions, not runtime discovery."""
         with anyio.fail_after(self._call_timeout):
             async with self._open_session() as session:
                 tools: list[types.Tool] = []
@@ -120,3 +117,26 @@ class ToolkitClient:
                     cursor = page.nextCursor
                     if not cursor:
                         return tools
+
+    @staticmethod
+    def _to_result(reply: types.CallToolResult) -> ToolExecutionResult:
+        """Adapt MCP content to the text/error contract used by all agent tools.
+
+        MCP's isError flag is handled here; toolkit JSON error envelopes inside
+        otherwise successful text replies are handled by ToolkitToolAdapter.
+        """
+        parts = [
+            item.text if isinstance(item, types.TextContent) else f"[{item.type} content omitted]"
+            for item in reply.content
+        ]
+        text = "\n".join(parts)
+        if reply.isError:
+            return ToolExecutionResult(content="", error=text or "The tool call failed.")
+        return ToolExecutionResult(content=text)
+
+    @staticmethod
+    def _root_cause(exc: BaseException) -> BaseException:
+        """Reveal the transport cause hidden by MCP's nested AnyIO task-group errors."""
+        while isinstance(exc, BaseExceptionGroup) and exc.exceptions:
+            exc = exc.exceptions[0]
+        return exc

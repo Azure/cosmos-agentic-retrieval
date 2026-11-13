@@ -8,6 +8,7 @@ import pytest
 
 from cosmos_agentic_retriever.agent.loop import (
     LlmTurn,
+    ModelError,
     TokenUsage,
     run_agent_search,
 )
@@ -193,8 +194,9 @@ async def test_tool_exception_becomes_error_observation():
 
 
 async def test_model_error_ends_episode():
+    error = ModelError("rate_limit", "The search model is busy.", 429, 20)
     model = _ScriptedModel(
-        [LlmTurn(message={"role": "assistant", "content": ""}, error="boom")]
+        [LlmTurn(message={"role": "assistant", "content": ""}, error=error)]
     )
     result = await run_agent_search(
         "q",
@@ -205,6 +207,7 @@ async def test_model_error_ends_episode():
     )
     assert result.terminal_reason == "error"
     assert result.turns == 1
+    assert result.error == error
 
 
 async def test_rejects_duplicate_tool_names():

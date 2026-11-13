@@ -21,7 +21,7 @@ from openai import AsyncOpenAI
 from cosmos_agentic_retriever import server
 from cosmos_agentic_retriever.agent import chat_client
 from cosmos_agentic_retriever.agent.chat_client import ChatClient
-from cosmos_agentic_retriever.agent.loop import LlmTurn, TokenUsage
+from cosmos_agentic_retriever.agent.loop import LlmTurn, ModelError, TokenUsage
 from cosmos_agentic_retriever.agent.tool_contracts import ToolCall
 from cosmos_agentic_retriever.agent.toolkit_client import ToolkitClient
 from cosmos_agentic_retriever.config import RetrieverConfig
@@ -284,11 +284,15 @@ def test_empty_search_is_not_a_failure(http):
 def test_model_failure_keeps_evidence_but_not_unfinished_answer(http):
     client, _ = http
     client.app.state.chat_client = _FakeChat([
-        _call(), LlmTurn(message={"role": "assistant", "content": ""}, error="private-key private-url"),
+        _call(), LlmTurn(
+            message={"role": "assistant", "content": ""},
+            error=ModelError("unavailable", "The search model is temporarily unavailable.", 503),
+        ),
     ])
     response = client.post("/agentic_search", json={"query": "question"})
-    assert response.status_code == 502
-    assert response.json()["error"] == "Model request failed."
+    assert response.status_code == 503
+    assert response.json()["error"] == "The search model is temporarily unavailable."
+    assert response.json()["error_kind"] == "unavailable"
     assert response.json()["answer"] == "" and response.json()["documents"][0]["id"] == "d1"
     assert "private-" not in response.text
 
@@ -357,7 +361,8 @@ class _FakeIdentity:
 
 
 @pytest.mark.parametrize("api_key", ["model-key", None])
-def test_chat_client_signs_in_with_key_or_entra(monkeypatch, api_key):
+@pytest.mark.parametrize("max_retries", [0, 6])
+def test_chat_client_signs_in_with_key_or_entra(monkeypatch, api_key, max_retries):
     identity = _FakeIdentity()
     monkeypatch.setattr(server, "AsyncDefaultAzureCredential", lambda: identity)
     sdk_options: dict = {}
@@ -367,7 +372,8 @@ def test_chat_client_signs_in_with_key_or_entra(monkeypatch, api_key):
         return Mock(close=AsyncMock())
 
     monkeypatch.setattr(chat_client, "AsyncOpenAI", fake_sdk)
-    with TestClient(_app(_settings(llm_api_key=api_key))):
+    with TestClient(_app(_settings(llm_api_key=api_key, llm_max_retries=max_retries))):
+        assert sdk_options["max_retries"] == max_retries
         client_key = sdk_options["api_key"]
         if api_key is None:
             assert anyio.run(client_key) == "entra-token"
@@ -403,7 +409,8 @@ def test_toolkit_client_signs_in_with_the_toolkit_app_and_one_credential(monkeyp
     assert closed == [True] and len(created) == 1 and created[0].closed
 
 
-def test_exhausted_sdk_retries_return_bad_gateway(monkeypatch):
+@pytest.mark.parametrize("max_retries", [0, 2, 6])
+def test_exhausted_sdk_retries_report_model_unavailable(monkeypatch, max_retries):
     requests = []
 
     def unavailable(request):
@@ -414,11 +421,132 @@ def test_exhausted_sdk_retries_return_bad_gateway(monkeypatch):
     monkeypatch.setattr("openai._base_client.anyio.sleep", delay)
     transport = httpx.AsyncClient(transport=httpx.MockTransport(unavailable))
     monkeypatch.setattr(chat_client, "AsyncOpenAI", lambda **options: AsyncOpenAI(http_client=transport, **options))
+    with TestClient(_app(_settings(llm_max_retries=max_retries))) as http:
+        response = http.post("/agentic_search", json={"query": "question"})
+    assert len(requests) == max_retries + 1 and delay.await_count == max_retries
+    assert response.status_code == 503 and response.json()["error_kind"] == "unavailable"
+    assert "private" not in response.text
+
+
+def _sdk_reply(message, finish_reason="stop"):
+    return httpx.Response(200, json={
+        "id": "model-reply", "object": "chat.completion", "created": 0,
+        "model": "test-model",
+        "choices": [{"index": 0, "finish_reason": finish_reason, "message": message}],
+    })
+
+
+def _mock_model_sdk(monkeypatch, respond):
+    delay = AsyncMock()
+    monkeypatch.setattr("openai._base_client.anyio.sleep", delay)
+    transport = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+    monkeypatch.setattr(
+        chat_client, "AsyncOpenAI",
+        lambda **options: AsyncOpenAI(http_client=transport, **options),
+    )
+    return delay
+
+
+def test_exhausted_rate_limit_reports_retry_hint_and_keeps_evidence(monkeypatch):
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        messages = json.loads(request.content)["messages"]
+        if messages[-1]["role"] == "user":
+            return _sdk_reply(_call().message, "tool_calls")
+        return httpx.Response(
+            429, headers={"Retry-After": "20"},
+            json={"error": {"code": "rate_limit_exceeded", "message": "private-key private-url"}},
+        )
+
+    delay = _mock_model_sdk(monkeypatch, respond)
+    toolkit = _Toolkit()
+    with TestClient(_app(_settings(llm_max_retries=2))) as http:
+        http.app.state.toolkit = ToolkitClient(
+            lambda: create_connected_server_and_client_session(toolkit.server)
+        )
+        response = http.post("/agentic_search", json={"query": "question"})
+
+    body = response.json()
+    assert response.status_code == 429 and body["error_kind"] == "rate_limit"
+    assert "rate limit" in body["error"]
+    assert body["retry_after_seconds"] == 20 and response.headers["Retry-After"] == "20"
+    assert body["answer"] == "" and body["documents"][0]["id"] == "d1"
+    assert body["turns"] == 2 and body["tool_calls"] == {"text_search": 1}
+    assert len(requests) == 4 and len(toolkit.calls) == 1
+    assert delay.await_count == 2
+    delay.assert_any_await(20)
+    assert "private-" not in response.text
+
+
+def test_transient_rate_limits_recover_without_restarting_the_question(monkeypatch):
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        if len(requests) <= 2:
+            return httpx.Response(
+                429, headers={"Retry-After": "0.01"},
+                json={"error": {"message": "busy", "code": "rate_limit_exceeded"}},
+            )
+        messages = json.loads(request.content)["messages"]
+        if messages[-1]["role"] == "user":
+            return _sdk_reply(_call().message, "tool_calls")
+        return _sdk_reply(_answer().message)
+
+    delay = _mock_model_sdk(monkeypatch, respond)
+    toolkit = _Toolkit()
+    with TestClient(_app(_settings(llm_max_retries=2))) as http:
+        http.app.state.toolkit = ToolkitClient(
+            lambda: create_connected_server_and_client_session(toolkit.server)
+        )
+        response = http.post("/agentic_search", json={"query": "question"})
+
+    body = response.json()
+    assert response.status_code == 200 and body["answer"] == "the answer"
+    assert body["turns"] == 2 and body["tool_calls"] == {"text_search": 1}
+    assert "error_kind" not in body and "Retry-After" not in response.headers
+    assert len(requests) == 4 and len(toolkit.calls) == 1
+    assert delay.await_count == 2
+    delay.assert_any_await(0.01)
+
+
+@pytest.mark.parametrize("status, code, kind, expected_status", [
+    (400, "content_filter", "content_filter", 400),
+    (401, "Unauthorized", "authentication", 502),
+    (403, "Forbidden", "authentication", 502),
+])
+def test_nonretryable_model_errors_have_safe_messages(monkeypatch, status, code, kind, expected_status):
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        return httpx.Response(status, json={
+            "error": {"code": code, "message": "private-key private-url"},
+        })
+
+    delay = _mock_model_sdk(monkeypatch, respond)
     with TestClient(_app(_settings())) as http:
         response = http.post("/agentic_search", json={"query": "question"})
-    assert len(requests) == 3 and delay.await_count == 2
-    assert response.status_code == 502 and response.json()["error"] == "Model request failed."
-    assert "private" not in response.text
+
+    assert response.status_code == expected_status and response.json()["error_kind"] == kind
+    assert "private-" not in response.text
+    assert "WWW-Authenticate" not in response.headers
+    assert len(requests) == 1
+    delay.assert_not_awaited()
+
+
+def test_content_filtered_success_response_does_not_look_like_an_empty_answer(monkeypatch):
+    _mock_model_sdk(monkeypatch, lambda request: _sdk_reply(
+        {"role": "assistant", "content": ""}, "content_filter"
+    ))
+    with TestClient(_app(_settings())) as http:
+        response = http.post("/agentic_search", json={"query": "question"})
+
+    assert response.status_code == 400
+    assert response.json()["error_kind"] == "content_filter"
+    assert response.json()["answer"] == ""
 
 
 @pytest.mark.parametrize("path", ["/search", "/agent_search"])

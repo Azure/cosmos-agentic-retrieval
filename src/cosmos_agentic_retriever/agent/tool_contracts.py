@@ -1,5 +1,10 @@
 """Tools the agent can call: what a tool is, how it is called, and what it returns.
 
+The loop should not depend on whether a capability runs local Python code or
+calls a remote MCP server. This contract gives both the same invocation shape.
+Execution metadata stays separate from content so timing and metrics do not
+consume the model's context or become accidental answer evidence.
+
 Handlers are async: the service, the model client and MCP are async, and tools
 mostly wait on the network.
 

@@ -9,6 +9,8 @@ llm_base_url: https://YOUR-ENDPOINT/v1
 llm_model: YOUR-MODEL
 # Extra options sent with each model call, such as {temperature: 0}.
 llm_params: {}
+# Retries after the initial model request; the SDK handles backoff and jitter.
+llm_max_retries: 6
 # Maximum model turns, and maximum documents returned, per question.
 agent_max_turns: 6
 agent_max_documents: 10

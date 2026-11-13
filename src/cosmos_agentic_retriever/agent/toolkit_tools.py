@@ -10,8 +10,10 @@ Search tools (`text_search`, `vector_search`, `hybrid_search`,
 `TrimRules` and their text shortened unless it is true. It is not sent to the
 toolkit. Other tools return full text.
 
-A handler checks the call against the request's `SearchScope` before calling the
-toolkit, and turns the toolkit's ``{"error": ...}`` replies into failed calls.
+This is the per-question policy layer, not another query engine. ToolkitClient
+owns transport; these handlers enforce request scope, retain evidence before
+shortening, and recognize toolkit error envelopes. The agent loop only receives
+Tool objects and never needs to know that their handlers call MCP.
 """
 
 from __future__ import annotations
@@ -21,7 +23,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
 from typing import Any
 
-from cosmos_agentic_retriever.agent.result_trimming import TrimRules, trim_json_text, trim_value
+from cosmos_agentic_retriever.agent.result_trimming import ResultTrimmer, TrimRules
 from cosmos_agentic_retriever.agent.tool_contracts import Tool, ToolExecutionResult
 from cosmos_agentic_retriever.agent.toolkit_client import ToolkitClient
 
@@ -50,13 +52,33 @@ RETURN_DOCUMENTS = {
 
 @dataclass(frozen=True)
 class ToolkitToolSpec:
-    """One toolkit tool as the agent sees it; ``search`` tools shorten text."""
+    """Keep the agent's tool contract explicit and independent of a live connection.
+
+    The toolkit's names and arguments stay intact. The search flag identifies
+    tools that can return previews and need our local returnDocuments option.
+    """
 
     name: str
     description: str
     properties: dict[str, Any]
     required: tuple[str, ...]
     search: bool = False
+
+    def agent_description(self, rules: TrimRules) -> str:
+        """Tell the model how to recover full text when previewing is enabled."""
+        if not self.search:
+            return self.description
+        return (
+            f"{self.description} Text longer than {rules.text_limit} characters is shortened; "
+            "set returnDocuments to true for full text, or read one document by its id."
+        )
+
+    def parameters(self) -> dict[str, Any]:
+        """Expose returnDocuments to the agent without adding it to the toolkit contract."""
+        properties = dict(self.properties)
+        if self.search:
+            properties["returnDocuments"] = RETURN_DOCUMENTS
+        return {"type": "object", "properties": properties, "required": list(self.required)}
 
 
 TOOLKIT_TOOLS: tuple[ToolkitToolSpec, ...] = (
@@ -182,7 +204,11 @@ TOOLKIT_TOOLS: tuple[ToolkitToolSpec, ...] = (
 
 @dataclass(frozen=True)
 class SearchScope:
-    """Where the agent may search. ``None`` allows any database or container."""
+    """Enforce the caller's search boundary even when the model chooses bad arguments.
+
+    Prompt instructions alone are not enforcement. None leaves that dimension
+    unrestricted; the toolkit's own identity and authorization still govern access.
+    """
 
     database: str | None = None
     containers: frozenset[str] | None = None
@@ -201,7 +227,12 @@ class SearchScope:
 
 @dataclass
 class SearchEvidence:
-    """Documents and tool failures collected for one question, before text shortening."""
+    """Keep support for the final answer independently of model-facing previews.
+
+    Created per question, it retains full cleaned documents before shortening,
+    identifies sources by database/container/id, and keeps failures visible to
+    the caller. Schema and listing results are not supporting documents.
+    """
 
     rules: TrimRules
     errors: list[dict[str, Any]] = field(default_factory=list)
@@ -220,6 +251,7 @@ class SearchEvidence:
     def record(
         self, name: str, arguments: dict[str, Any], result: ToolExecutionResult
     ) -> None:
+        """Capture actual tool results so model-written citations cannot invent evidence."""
         document_tool = name == "find_document_by_id" or any(
             spec.name == name and spec.search for spec in TOOLKIT_TOOLS
         )
@@ -242,6 +274,7 @@ class SearchEvidence:
             return
         items = parsed if isinstance(parsed, list) else [parsed]
         seen: set[str] = set()
+        trimmer = ResultTrimmer(self.rules)
         for rank, item in enumerate(items):
             if not isinstance(item, dict):
                 continue
@@ -255,12 +288,16 @@ class SearchEvidence:
                 "database": database,
                 "container": container,
                 "id": item_id,
-                "document": {**previous, **trim_value(item, self.rules, shorten_text=False)},
+                "document": {**previous, **trimmer.trim_value(item, shorten_text=False)},
             }
             self._scores[key] = self._scores.get(key, 0.0) + 1.0 / (60 + rank)
 
     def documents(self, answer: str, *, limit: int) -> list[dict[str, Any]]:
-        """Prefer cited documents, then reciprocal rank across successful calls."""
+        """Prefer cited retrieved documents, then merge search positions within the cap.
+
+        Reciprocal rank uses positions because scores from different searches
+        are not directly comparable. Unretrieved citation IDs add no documents.
+        """
         keys = sorted(
             self._documents,
             key=lambda key: (
@@ -271,33 +308,81 @@ class SearchEvidence:
         return [self._documents[key] for key in keys[:limit]]
 
 
-def _toolkit_error(text: str) -> str | None:
-    """The message of a toolkit error reply such as {"error": "...", "statusCode": 429}."""
-    try:
-        parsed = json.loads(text)
-    except json.JSONDecodeError:
+class ToolkitToolAdapter:
+    """Bind one toolkit tool to one question's output policy and search boundary.
+
+    The client can be shared, but scope and evidence must not leak between
+    questions. A bound handler keeps that state out of the transport and loop.
+    """
+
+    def __init__(
+        self,
+        client: ToolkitClient,
+        spec: ToolkitToolSpec,
+        *,
+        scope: SearchScope,
+        rules: TrimRules,
+        evidence: SearchEvidence | None = None,
+    ) -> None:
+        self._client = client
+        self._spec = spec
+        self._scope = scope
+        self._rules = rules
+        self._trimmer = ResultTrimmer(rules)
+        self._evidence = evidence
+
+    def as_tool(self) -> Tool:
+        """Present the generic Tool interface while keeping MCP behind the handler."""
+        return Tool(
+            name=self._spec.name,
+            description=self._spec.agent_description(self._rules),
+            parameters=self._spec.parameters(),
+            handler=self.handle,
+            implementation="mcp-toolkit",
+        )
+
+    async def handle(self, calls: list[dict[str, Any]]) -> list[ToolExecutionResult]:
+        return [await self._call(arguments) for arguments in calls]
+
+    async def _call(self, arguments: dict[str, Any]) -> ToolExecutionResult:
+        """Check scope before network access and keep evidence before building a preview."""
+        forwarded = dict(arguments)
+        full_text = forwarded.pop("returnDocuments", False) is True
+        problem = self._scope.problem(forwarded)
+        if problem is not None:
+            result = ToolExecutionResult(content="", error=problem)
+        else:
+            result = await self._client.call_tool(self._spec.name, forwarded)
+            if result.error is None:
+                error = self._toolkit_error(result.content)
+                if error is not None:
+                    result = replace(result, content="", error=error)
+        if self._evidence is not None:
+            self._evidence.record(self._spec.name, forwarded, result)
+        if result.error is not None:
+            return result
+        return replace(
+            result,
+            content=self._trimmer.trim_json_text(
+                result.content, shorten_text=self._spec.search and not full_text
+            ),
+        )
+
+    @staticmethod
+    def _toolkit_error(text: str) -> str | None:
+        """Promote toolkit failures hidden inside otherwise successful MCP text replies.
+
+        Restrict recognition to error-shaped envelopes: user documents can
+        legitimately contain a field named error without describing a failed call.
+        """
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            return None
+        if isinstance(parsed, dict) and "error" in parsed and set(parsed) <= {"error", "statusCode", "hint"}:
+            status = parsed.get("statusCode")
+            return f"{parsed['error']} (status {status})" if status is not None else str(parsed["error"])
         return None
-    # Only error-shaped objects, so a document with its own "error" field is not mistaken for one.
-    if isinstance(parsed, dict) and "error" in parsed and set(parsed) <= {"error", "statusCode", "hint"}:
-        status = parsed.get("statusCode")
-        return f"{parsed['error']} (status {status})" if status is not None else str(parsed["error"])
-    return None
-
-
-def _description(spec: ToolkitToolSpec, rules: TrimRules) -> str:
-    if not spec.search:
-        return spec.description
-    return (
-        f"{spec.description} Text longer than {rules.text_limit} characters is shortened; "
-        "set returnDocuments to true for full text, or read one document by its id."
-    )
-
-
-def _parameters(spec: ToolkitToolSpec) -> dict[str, Any]:
-    properties = dict(spec.properties)
-    if spec.search:
-        properties["returnDocuments"] = RETURN_DOCUMENTS
-    return {"type": "object", "properties": properties, "required": list(spec.required)}
 
 
 def make_toolkit_tools(
@@ -308,43 +393,17 @@ def make_toolkit_tools(
     names: Iterable[str] | None = None,
     evidence: SearchEvidence | None = None,
 ) -> list[Tool]:
-    """Build agent tools for the toolkit tools in ``names`` (default: all of them)."""
+    """Build fresh bound handlers per question, reusing only the transport client.
+
+    names limits the offered tools, for example when a caller has already
+    supplied a scope and database discovery is unnecessary. None offers all tools.
+    """
     wanted = None if names is None else set(names)
     unknown = (wanted or set()) - {spec.name for spec in TOOLKIT_TOOLS}
     if unknown:
         raise ValueError(f"unknown toolkit tools: {sorted(unknown)}")
-
-    def make(spec: ToolkitToolSpec) -> Tool:
-        async def call(arguments: dict[str, Any]) -> ToolExecutionResult:
-            forwarded = dict(arguments)
-            full_text = forwarded.pop("returnDocuments", False) is True
-            problem = scope.problem(forwarded)
-            if problem is not None:
-                result = ToolExecutionResult(content="", error=problem)
-            else:
-                result = await client.call_tool(spec.name, forwarded)
-                if result.error is None:
-                    error = _toolkit_error(result.content)
-                    if error is not None:
-                        result = replace(result, content="", error=error)
-            if evidence is not None:
-                evidence.record(spec.name, forwarded, result)
-            if result.error is not None:
-                return result
-            shorten = spec.search and not full_text
-            return replace(
-                result, content=trim_json_text(result.content, rules, shorten_text=shorten)
-            )
-
-        async def handler(calls: list[dict[str, Any]]) -> list[ToolExecutionResult]:
-            return [await call(arguments) for arguments in calls]
-
-        return Tool(
-            name=spec.name,
-            description=_description(spec, rules),
-            parameters=_parameters(spec),
-            handler=handler,
-            implementation="mcp-toolkit",
-        )
-
-    return [make(spec) for spec in TOOLKIT_TOOLS if wanted is None or spec.name in wanted]
+    return [
+        ToolkitToolAdapter(client, spec, scope=scope, rules=rules, evidence=evidence).as_tool()
+        for spec in TOOLKIT_TOOLS
+        if wanted is None or spec.name in wanted
+    ]

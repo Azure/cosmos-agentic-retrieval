@@ -182,6 +182,7 @@ def create_app(
                 model=resolved.llm_model,
                 api_key=llm_auth,
                 params=dict(resolved.llm_params),
+                max_retries=resolved.llm_max_retries,
             )
             async_resources.push_async_callback(chat_client.close)
             app.state.chat_client = chat_client
@@ -366,9 +367,14 @@ def create_app(
             "errors": evidence.errors,
             "partial": bool(evidence.errors) and bool(evidence.searched),
         }
-        if result.terminal_reason == "error":
-            body.update(answer="", error="Model request failed.")
-            return JSONResponse(status_code=502, content=body)
+        if result.error is not None:
+            error = result.error
+            body.update(answer="", error=error.message, error_kind=error.kind)
+            headers = {}
+            if error.retry_after_seconds is not None:
+                body["retry_after_seconds"] = error.retry_after_seconds
+                headers["Retry-After"] = str(error.retry_after_seconds)
+            return JSONResponse(status_code=error.status_code, content=body, headers=headers)
         if evidence.errors and not evidence.searched:
             body.update(answer="", error="Toolkit calls failed; no containers were searched.")
             return JSONResponse(status_code=500, content=body)

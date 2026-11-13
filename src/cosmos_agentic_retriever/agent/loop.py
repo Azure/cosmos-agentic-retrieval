@@ -1,22 +1,20 @@
-"""Run model requests and tool calls until the model answers or the turn limit is reached.
+"""Own one question's reasoning loop without owning model or tool transports.
 
-run_agent_search calls the supplied complete function for the model's next
-reply. The service passes ChatClient.complete from chat_client.py. That client
-makes the API request and returns the reply and requested tool calls; it does
-not execute them.
+The loop coordinates transcript updates, tool execution, usage and termination.
+The injected complete callable handles the model API; Tool handlers decide where
+tools run. This separation keeps HTTP and MCP lifecycle details out of reasoning
+and lets tests supply scripted model turns without network access.
 
-This loop executes the tool calls, adds their results to the conversation, and
-asks the model again. A call whose arguments could not be parsed is not run; the
-model gets the parsing error instead. The loop stops when a reply has no tool
-calls, a model call fails, or max_turns model calls have been made. Tools follow
-the contract in tool_contracts.py.
+Bad tool arguments and tool failures become observations the model can correct.
+A final model failure stops the loop and carries its safe error to the endpoint;
+the turn limit bounds model turns, not elapsed time or the number of tool calls.
 """
 
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, fields
-from typing import Any
+from typing import Any, Literal
 
 import structlog
 
@@ -51,6 +49,19 @@ class TokenUsage:
 
 
 @dataclass(frozen=True)
+class ModelError:
+    """A model failure safe to return to a caller, without provider response text."""
+
+    kind: Literal[
+        "rate_limit", "content_filter", "timeout", "unavailable", "authentication",
+        "invalid_request", "invalid_response", "unknown",
+    ]
+    message: str
+    status_code: int
+    retry_after_seconds: int | None = None
+
+
+@dataclass(frozen=True)
 class LlmTurn:
     """One model reply: its text, any tool calls, and the message to append.
 
@@ -62,7 +73,7 @@ class LlmTurn:
     message: dict[str, Any]
     content: str | None = None
     tool_calls: list[ToolCall | InvalidToolCall] = field(default_factory=list)
-    error: str | None = None
+    error: ModelError | None = None
     usage: TokenUsage = field(default_factory=TokenUsage)
 
 
@@ -85,20 +96,7 @@ class AgentResult:
     tool_calls: dict[str, int] = field(default_factory=dict)
     # One response per tool call, in the order the calls ran.
     tool_responses: list[ToolCallResponse] = field(default_factory=list)
-
-
-def _observation(response: ToolCallResponse) -> str:
-    """The text shown to the model for one tool call: its output or its error."""
-    return response.content if response.error is None else f"Error: {response.error}"
-
-
-async def _respond(
-    tools_by_name: dict[str, Tool], call: ToolCall | InvalidToolCall
-) -> ToolCallResponse:
-    """Run a valid call; answer an unparseable one with its parsing error."""
-    if isinstance(call, InvalidToolCall):
-        return ToolCallResponse(call_id=call.id, content="", error=call.error)
-    return await execute_tool_call(tools_by_name, call)
+    error: ModelError | None = None
 
 
 async def run_agent_search(
@@ -115,8 +113,7 @@ async def run_agent_search(
         question: the caller's request; the model decides what to search for.
         complete: gets the model's next reply as an LlmTurn. The service passes
             ChatClient.complete; tests can supply a scripted coroutine.
-        tools: the capabilities offered to the model (the `full_text_search`
-            tool). Names must be unique.
+        tools: the capabilities offered to the model. Names must be unique.
         system_prompt: the instruction that opens the transcript.
         max_turns: the hard cap on model calls; the loop always stops by here.
 
@@ -130,6 +127,14 @@ async def run_agent_search(
     if len(tools_by_name) != len(tools):
         raise ValueError("tool names must be unique")
 
+    def observation(response: ToolCallResponse) -> str:
+        return response.content if response.error is None else f"Error: {response.error}"
+
+    async def respond(call: ToolCall | InvalidToolCall) -> ToolCallResponse:
+        if isinstance(call, InvalidToolCall):
+            return ToolCallResponse(call_id=call.id, content="", error=call.error)
+        return await execute_tool_call(tools_by_name, call)
+
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": question},
@@ -141,24 +146,26 @@ async def run_agent_search(
     )
     tool_calls: dict[str, int] = {}
     tool_responses: list[ToolCallResponse] = []
+    error: ModelError | None = None
     for turn in range(1, max_turns + 1):
         reply = await complete(messages, tools)
         messages.append(reply.message)
         usage += reply.usage
         if reply.error is not None:
             terminal_reason = "error"
+            error = reply.error
             break
         if not reply.tool_calls:
             terminal_reason = "stop"
             break
         for call in reply.tool_calls:
             tool_calls[call.name] = tool_calls.get(call.name, 0) + 1
-            response = await _respond(tools_by_name, call)
+            response = await respond(call)
             if response.error is not None:
                 _logger.warning("tool_call_failed", tool=call.name, error=response.error)
             tool_responses.append(response)
             messages.append(
-                {"role": "tool", "tool_call_id": call.id, "content": _observation(response)}
+                {"role": "tool", "tool_call_id": call.id, "content": observation(response)}
             )
 
     answer = ""
@@ -174,4 +181,5 @@ async def run_agent_search(
         usage=usage,
         tool_calls=tool_calls,
         tool_responses=tool_responses,
+        error=error,
     )
