@@ -19,7 +19,7 @@ import pytest
 import uvicorn
 from fastapi.testclient import TestClient
 
-from cosmos_agentic_retriever.config import RetrieverConfig
+from cosmos_agentic_retriever.config import AgenticSearchConfig
 from cosmos_agentic_retriever.server import create_app
 
 pytestmark = [
@@ -43,7 +43,7 @@ pytestmark = [
 @pytest.fixture(scope="session")
 def agent_settings():
     """The explicitly configured live model and toolkit."""
-    return RetrieverConfig(
+    return AgenticSearchConfig(
         llm_base_url=os.environ["COSMOS_TEST_LLM_BASE_URL"],
         llm_model=os.environ["COSMOS_TEST_LLM_MODEL"],
         llm_api_key=os.environ.get("COSMOS_TEST_LLM_API_KEY"),

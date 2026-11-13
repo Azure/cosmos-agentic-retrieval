@@ -1,6 +1,6 @@
 """Configure the agentic-search service.
 
-`RetrieverConfig` is a pydantic-settings model: each field is read from the
+`AgenticSearchConfig` is a pydantic-settings model: each field is read from the
 matching uppercased environment variable at startup (`LLM_BASE_URL`,
 `LLM_MODEL`, `TOOLKIT_APP_ID`, ...), loaded by `get_config()`.
 
@@ -30,7 +30,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from cosmos_agentic_retriever.agent.result_trimming import DEFAULT_DROPPED_FIELDS
 
 
-class RetrieverConfig(BaseSettings):
+class AgenticSearchConfig(BaseSettings):
     """Startup settings for the model, the toolkit, and the HTTP server."""
 
     model_config = SettingsConfigDict(extra="forbid")
@@ -65,7 +65,7 @@ class RetrieverConfig(BaseSettings):
         return value
 
 
-def get_config() -> RetrieverConfig:
+def get_config() -> AgenticSearchConfig:
     """Build the settings at startup from a YAML file or the environment.
 
     When `COSMOS_RETRIEVER_CONFIG_FILE` is set, its YAML contents are validated as
@@ -76,5 +76,5 @@ def get_config() -> RetrieverConfig:
     path = os.environ.get("COSMOS_RETRIEVER_CONFIG_FILE")
     if path:
         data = yaml.safe_load(Path(path).read_text()) or {}
-        return RetrieverConfig.model_validate(data)
-    return RetrieverConfig()
+        return AgenticSearchConfig.model_validate(data)
+    return AgenticSearchConfig()

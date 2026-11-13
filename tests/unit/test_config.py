@@ -7,7 +7,7 @@ import pytest
 from pydantic import ValidationError
 
 from cosmos_agentic_retriever import __main__ as cli
-from cosmos_agentic_retriever.config import RetrieverConfig, get_config
+from cosmos_agentic_retriever.config import AgenticSearchConfig, get_config
 
 
 def _environment(monkeypatch):
@@ -130,7 +130,7 @@ def test_settings_reject_invalid_configuration(options):
         "toolkit_app_id": "test-toolkit",
     }
     with pytest.raises(ValidationError):
-        RetrieverConfig(**{**values, **options})
+        AgenticSearchConfig(**{**values, **options})
 
 
 @pytest.mark.parametrize(
@@ -143,7 +143,7 @@ def test_settings_reject_invalid_configuration(options):
     ],
 )
 def test_serve_command(monkeypatch, arguments, host, port):
-    settings = RetrieverConfig(
+    settings = AgenticSearchConfig(
         llm_base_url="https://model.example.com/v1",
         llm_model="test-model",
         toolkit_app_id="test-toolkit",

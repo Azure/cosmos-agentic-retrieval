@@ -51,7 +51,7 @@ from mcp.types import TextContent
 from openai import OpenAI
 from tqdm import tqdm
 
-from cosmos_agentic_retriever.config import RetrieverConfig
+from cosmos_agentic_retriever.config import AgenticSearchConfig
 from cosmos_agentic_retriever.server import LLM_TOKEN_SCOPE, create_app
 from dataset_contracts import Question
 from dataset_hipporag2 import HippoRAG2Collection
@@ -102,7 +102,7 @@ def sample_questions_per_dataset(
 
 def start_in_process_search(stack: ExitStack, settings: dict[str, Any]) -> SearchFn:
     """Start the service in this process and send questions to its /agentic_search."""
-    config = RetrieverConfig(toolkit_app_id=settings["toolkit_app_id"])
+    config = AgenticSearchConfig(toolkit_app_id=settings["toolkit_app_id"])
     http = stack.enter_context(TestClient(create_app(config)))
 
     def search(query: str) -> dict[str, Any]:

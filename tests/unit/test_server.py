@@ -7,12 +7,12 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from cosmos_agentic_retriever import server
-from cosmos_agentic_retriever.config import RetrieverConfig
+from cosmos_agentic_retriever.config import AgenticSearchConfig
 from cosmos_agentic_retriever.server import AgenticSearchRequest, create_app
 
 
 def _settings(**options):
-    return RetrieverConfig(
+    return AgenticSearchConfig(
         **{
             "llm_base_url": "https://model.example.com/v1",
             "llm_model": "test-model",

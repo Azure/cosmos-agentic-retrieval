@@ -23,7 +23,7 @@ from cosmos_agentic_retriever.agent.chat_client import ChatClient
 from cosmos_agentic_retriever.agent.loop import LlmTurn, ModelError, TokenUsage
 from cosmos_agentic_retriever.agent.tool_contracts import ToolCall
 from cosmos_agentic_retriever.agent.toolkit_client import ToolkitClient
-from cosmos_agentic_retriever.config import RetrieverConfig
+from cosmos_agentic_retriever.config import AgenticSearchConfig
 from cosmos_agentic_retriever.server import create_app
 
 
@@ -87,17 +87,17 @@ class _Toolkit:
             return next(item for items in self.results.values() for item in items if item["id"] == id)
 
 
-def _settings(**options) -> RetrieverConfig:
+def _settings(**options) -> AgenticSearchConfig:
     options.setdefault("llm_api_key", "test-key")
     options.setdefault("toolkit_app_id", "app-123")
-    return RetrieverConfig(
+    return AgenticSearchConfig(
         llm_base_url="https://model.example.com/v1",
         llm_model="test-model",
         **options,
     )
 
 
-def _app(settings: RetrieverConfig):
+def _app(settings: AgenticSearchConfig):
     return create_app(settings)
 
 

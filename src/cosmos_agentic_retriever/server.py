@@ -28,7 +28,7 @@ from cosmos_agentic_retriever.agent.toolkit_tools import (
     SearchScope,
     make_toolkit_tools,
 )
-from cosmos_agentic_retriever.config import RetrieverConfig, get_config
+from cosmos_agentic_retriever.config import AgenticSearchConfig, get_config
 
 # Entra token audience for Azure OpenAI and Azure AI Foundry model endpoints.
 LLM_TOKEN_SCOPE = "https://cognitiveservices.azure.com/.default"
@@ -59,7 +59,7 @@ class AgenticSearchRequest(BaseModel):
         return value
 
 
-def create_app(settings: RetrieverConfig | None = None) -> FastAPI:
+def create_app(settings: AgenticSearchConfig | None = None) -> FastAPI:
     """Serve agentic search using explicit settings or the environment."""
     resolved = (settings or get_config()).model_copy(deep=True)
     logger = structlog.get_logger("cosmos_agentic_retriever.server")

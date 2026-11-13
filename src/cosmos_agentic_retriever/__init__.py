@@ -18,10 +18,10 @@ has a full-text index.
 	import os
 	import uvicorn
 
-	from cosmos_agentic_retriever.config import RetrieverConfig
+	from cosmos_agentic_retriever.config import AgenticSearchConfig
 	from cosmos_agentic_retriever.server import create_app
 
-	settings = RetrieverConfig(
+	settings = AgenticSearchConfig(
 		llm_base_url=os.environ["LLM_BASE_URL"],
 		llm_model=os.environ["LLM_MODEL"],
 		llm_api_key=os.environ.get("LLM_API_KEY"),

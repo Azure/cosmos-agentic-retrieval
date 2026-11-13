@@ -11,7 +11,7 @@ import uvicorn
 from pydantic import ValidationError
 from pydantic_settings import SettingsError
 
-from cosmos_agentic_retriever.config import RetrieverConfig, get_config
+from cosmos_agentic_retriever.config import AgenticSearchConfig, get_config
 from cosmos_agentic_retriever.server import create_app
 
 
@@ -39,9 +39,9 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     }
     if overrides:
         values = {
-            name: getattr(settings, name) for name in RetrieverConfig.model_fields
+            name: getattr(settings, name) for name in AgenticSearchConfig.model_fields
         }
-        settings = RetrieverConfig(**{**values, **overrides})
+        settings = AgenticSearchConfig(**{**values, **overrides})
     app = create_app(settings)
     uvicorn.run(
         app, host=settings.host, port=settings.port, log_level=settings.log_level
