@@ -21,6 +21,8 @@ dependencies = [
 benchmark = [
   "azure-cosmos>=4.7,<5",
   "huggingface_hub>=0.24,<2",
+  "pyarrow>=18,<27",
+  "tiktoken>=0.7,<1",
 ]
 dev = [
   "azure-core>=1.30,<2",

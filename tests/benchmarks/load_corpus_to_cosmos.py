@@ -5,7 +5,9 @@ with full-text indexes on the title and text and a vector index on the embedding
 field, so every MCP toolkit search tool works on it. Then embeds the passages not
 yet in the container with the given embedding deployment and writes them. A failed
 batch is reported and the load continues; rerunning skips the passages already
-loaded. With --force, every passage is embedded and rewritten.
+loaded. With --force, every passage is embedded and rewritten. With
+--document-ids-file, only the listed documents are loaded; a later run with a
+longer list, or without one, adds the rest.
 
 Example:
     python tests/benchmarks/load_corpus_to_cosmos.py --subscription <id> \
@@ -20,6 +22,8 @@ import json
 import subprocess
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import asdict
+from pathlib import Path
 
 from azure.cosmos import CosmosClient
 from azure.identity import AzureCliCredential, get_bearer_token_provider
@@ -27,9 +31,13 @@ from openai import OpenAI
 from tqdm import tqdm
 
 from dataset_contracts import Passage
+from dataset_enterprise_rag_bench import EnterpriseRAGBenchCollection
 from dataset_hipporag2 import HippoRAG2Collection
 
-COLLECTIONS = {"hipporag2": HippoRAG2Collection}
+COLLECTIONS = {
+    "enterprise-rag-bench": EnterpriseRAGBenchCollection,
+    "hipporag2": HippoRAG2Collection,
+}
 TEXT_PATHS = ("/title", "/text")
 # Entra token audience for Azure OpenAI and Azure AI Foundry endpoints.
 TOKEN_SCOPE = "https://cognitiveservices.azure.com/.default"
@@ -122,12 +130,28 @@ def main() -> None:
         default=2,
         help=f"number of threads working in parallel; each embeds and writes {PASSAGES_PER_EMBEDDING_REQUEST} passages at a time (default: %(default)s)",
     )
+    parser.add_argument(
+        "--document-ids-file",
+        type=Path,
+        help="file with one document ID per line; load only those documents (default: the whole corpus)",
+    )
     parser.add_argument("--force", action="store_true", help="rewrite passages that already exist")
     args = parser.parse_args()
 
     collection = COLLECTIONS[args.collection]()
-    passages = collection.read_merged_corpus_passages()
-    print(f"{collection.name}: {len(passages)} passages")
+    print(f"Reading the {collection.name} corpus")
+    documents = collection.read_merged_corpus_documents()
+    if args.document_ids_file:
+        wanted = {line.strip() for line in args.document_ids_file.read_text().splitlines() if line.strip()}
+        missing = wanted - {d.id for d in documents}
+        if missing:
+            raise SystemExit(
+                f"{len(missing)} of {len(wanted)} listed document IDs are not in {collection.name}, "
+                f"e.g. {sorted(missing)[:5]}"
+            )
+        documents = [d for d in documents if d.id in wanted]
+    passages = [p for d in documents for p in d.get_passages()]
+    print(f"{collection.name}: {len(documents)} documents, {len(passages)} passages")
 
     embedder = OpenAI(
         base_url=args.embedding_base_url,
@@ -164,15 +188,7 @@ def main() -> None:
         """Embed and write one batch; return the error instead of raising, so other batches continue."""
         try:
             for passage, embedding in zip(batch, embed_passages(batch), strict=True):
-                container.upsert_item(
-                    {
-                        "id": passage.id,
-                        "title": passage.title,
-                        "text": passage.text,
-                        "datasets": list(passage.datasets),
-                        args.embedding_field: embedding,
-                    }
-                )
+                container.upsert_item({**asdict(passage), args.embedding_field: embedding})
         except Exception as exc:
             return f"{type(exc).__name__}: {exc}"[:200]
         return None
