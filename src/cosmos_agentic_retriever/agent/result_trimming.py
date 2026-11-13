@@ -2,40 +2,24 @@
 
 The toolkit's tools return whole Cosmos DB documents as JSON, including stored
 embeddings, Cosmos DB system fields, and full text. That costs the agent's model
-tokens without helping it answer. `trim_tool` wraps a `Tool` so its JSON results
-are trimmed:
+tokens without helping it answer. `trim_json_text` trims a JSON result:
 
 - A list of at least `min_vector_dim` numbers is an embedding; it is replaced by
   a short marker, so the agent still sees which field holds the vector.
 - Fields named in `dropped_fields` are removed wherever they appear. By default
   these are Cosmos DB's internal system fields.
-- For search tools, text longer than `text_limit` characters is shortened, unless
-  the call sets `return_documents` to true. Other tools, such as reading one
-  document by ID, return full text.
+- With ``shorten_text``, text longer than `text_limit` characters is shortened.
 
-Results that are not JSON, and failed calls, pass through unchanged.
+Text that is not JSON is returned unchanged.
 """
 
 from __future__ import annotations
 
-import copy
 import json
-from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from cosmos_agentic_retriever.agent.tool_contracts import Tool, ToolExecutionResult
-
 DEFAULT_DROPPED_FIELDS = ("_rid", "_self", "_etag", "_attachments")
-
-# Toolkit tools that return search results; only these shorten text.
-SEARCH_TOOLS = frozenset({"text_search", "vector_search", "hybrid_search", "get_recent_documents"})
-
-_RETURN_DOCUMENTS = {
-    "type": "boolean",
-    "description": "Return each document's full text instead of shortened text.",
-    "default": False,
-}
 
 
 @dataclass(frozen=True)
@@ -71,51 +55,11 @@ def trim_value(value: Any, rules: TrimRules, *, shorten_text: bool) -> Any:
     return value
 
 
-def _trim_text(text: str, rules: TrimRules, *, shorten_text: bool) -> str:
+def trim_json_text(text: str, rules: TrimRules, *, shorten_text: bool) -> str:
+    """Trim a JSON result and return it as compact JSON; other text is unchanged."""
     try:
         parsed = json.loads(text)
     except json.JSONDecodeError:
         return text
     trimmed = trim_value(parsed, rules, shorten_text=shorten_text)
     return json.dumps(trimmed, ensure_ascii=False, separators=(",", ":"))
-
-
-def _trim_result(
-    result: str | ToolExecutionResult, rules: TrimRules, *, shorten_text: bool
-) -> str | ToolExecutionResult:
-    if isinstance(result, str):
-        return _trim_text(result, rules, shorten_text=shorten_text)
-    if result.error is not None:
-        return result
-    content = _trim_text(result.content, rules, shorten_text=shorten_text)
-    return ToolExecutionResult(content=content, metrics=dict(result.metrics))
-
-
-def trim_tool(tool: Tool, rules: TrimRules) -> Tool:
-    """Wrap ``tool`` so its results are trimmed; search tools gain `return_documents`."""
-    is_search = tool.name in SEARCH_TOOLS
-    parameters = copy.deepcopy(tool.parameters)
-    description = tool.description
-    if is_search:
-        parameters.setdefault("properties", {})["return_documents"] = _RETURN_DOCUMENTS
-        description = (
-            f"{description} Text longer than {rules.text_limit} characters is shortened; "
-            "set return_documents to true for full text, or read one document by its ID."
-        ).strip()
-
-    async def handler(calls: list[dict[str, Any]]) -> Sequence[str | ToolExecutionResult]:
-        forwarded = [dict(arguments) for arguments in calls]
-        full_text = [arguments.pop("return_documents", False) is True for arguments in forwarded]
-        results = await tool.handler(forwarded)
-        return [
-            _trim_result(result, rules, shorten_text=is_search and not full)
-            for result, full in zip(results, full_text, strict=True)
-        ]
-
-    return Tool(
-        name=tool.name,
-        description=description,
-        parameters=parameters,
-        handler=handler,
-        implementation=tool.implementation,
-    )
