@@ -177,6 +177,7 @@ def test_scope_selects_discovery_tools_and_prompt(http, scope, listing):
     assert "agentic_search" not in chat.tools_seen[0] and "full_text_search" not in chat.tools_seen[0]
     prompt = chat.messages_seen[0][0]["content"]
     assert "get_approximate_schema" in prompt and "selectProperties must include id" in prompt
+    assert "read them in full" in prompt
     assert "[database/container/id]" in prompt
 
 
