@@ -56,7 +56,8 @@ hosts the model:
 
 The script builds the service image with the configuration inside, pushes it to
 the toolkit's registry, lets the app's managed identity call the model and the
-toolkit's MCP tools, and adds the service as a second container in the app.
+toolkit's MCP tools, adds the service as a second container in the app, and
+turns on the toolkit's `agentic_search` tool if it is off.
 Run it as an owner of the toolkit's Entra app; whoever deployed the toolkit is
 one. On networks that block PyPI, add `-PipIndexUrl <mirror>` to install
 packages from a mirror.
