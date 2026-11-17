@@ -1,7 +1,8 @@
 """Run a benchmark collection's questions through agentic search and save the responses.
 
-By default the service runs inside this process against the corpus loaded by
-load_corpus_to_cosmos.py, signing in with `az login`; its agent model comes from
+By default the service runs inside this process, and its agent searches the
+corpus loaded by load_corpus_to_cosmos.py through the MCP toolkit at
+TOOLKIT_MCP_URL (default http://127.0.0.1:8080/mcp); its agent model comes from
 LLM_BASE_URL, LLM_MODEL and LLM_API_KEY. With --toolkit-url, each question
 instead goes to a deployed MCP toolkit's agentic_search tool, and the
 deployment's own retriever settings apply. evaluate.py scores the saved run.
@@ -13,7 +14,7 @@ reruns only the failed or missing questions of an earlier run, with that run's
 settings, into a new file.
 
 Examples:
-    python tests/benchmarks/run.py --account-uri https://<account>.documents.azure.com:443/ \
+    python tests/benchmarks/run.py --toolkit-app-id <entra-app-client-id> \
         --collection hipporag2 --container hipporag2-full --questions-per-dataset 100
     python tests/benchmarks/run.py --toolkit-url https://<app>.azurecontainerapps.io/mcp \
         --toolkit-app-id <entra-app-client-id> --collection hipporag2 --container hipporag2-full
@@ -48,7 +49,7 @@ from mcp.client.streamable_http import streamable_http_client
 from mcp.types import TextContent
 from tqdm import tqdm
 
-from cosmos_agentic_retriever.config import RetrieverConfig
+from cosmos_agentic_retriever.config import AgenticSearchConfig
 from cosmos_agentic_retriever.server import create_app
 from dataset_contracts import Question
 from dataset_enterprise_rag_bench import EnterpriseRAGBenchCollection
@@ -66,7 +67,6 @@ MAX_DOCUMENTS = 10
 RUN_SETTINGS = (
     "collection",
     "container",
-    "account_uri",
     "database",
     "questions_per_dataset",
     "seed",
@@ -96,28 +96,18 @@ def sample_questions_per_dataset(
 
 def start_in_process_search(stack: ExitStack, settings: dict[str, Any]) -> SearchFn:
     """Start the service in this process and send questions to its /agentic_search."""
-    config = RetrieverConfig(
-        account_uri=settings["account_uri"],
-        cosmos_database=settings["database"],
-        cosmos_credential="azure_cli",
-        cosmos_containers={
-            settings["container"]: {
-                "cosmos_schema": {
-                    "item_id_path": "/id",
-                    "partition_key_paths": ["/id"],
-                    "text_paths": ["/title", "/text"],
-                    # Collections stored as chunks define which fields link a chunk to its document.
-                    **getattr(COLLECTIONS[settings["collection"]], "chunk_schema", {}),
-                },
-                "search_text_fields": ["/title", "/text"],
-            }
-        },
-    )
+    config = AgenticSearchConfig(toolkit_app_id=settings["toolkit_app_id"])
     http = stack.enter_context(TestClient(create_app(config)))
 
     def search(query: str) -> dict[str, Any]:
         response = http.post(
-            "/agentic_search", json={"query": query, "maxDocuments": MAX_DOCUMENTS}
+            "/agentic_search",
+            json={
+                "query": query,
+                "maxDocuments": MAX_DOCUMENTS,
+                "database": settings["database"],
+                "container": settings["container"],
+            },
         )
         body = response.json()
         if response.status_code != 200:
@@ -292,12 +282,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--collection", choices=sorted(COLLECTIONS), help="benchmark collection whose questions to run")
     parser.add_argument("--container", help="Cosmos container holding the collection's corpus")
-    parser.add_argument("--account-uri", help="Cosmos DB account URI, to run the service in this process")
     parser.add_argument("--database", help=f"database holding the container (default: {DEFAULTS['database']})")
     parser.add_argument("--questions-per-dataset", type=int, help="questions sampled from each dataset, or from each category of datasets with categories (default: all)")
     parser.add_argument("--seed", type=int, help=f"random seed for sampling questions (default: {DEFAULTS['seed']})")
-    parser.add_argument("--toolkit-url", help="a deployed MCP toolkit's /mcp URL, to run through the toolkit instead")
-    parser.add_argument("--toolkit-app-id", help="client ID of the toolkit's Entra app, used to sign in to the toolkit")
+    parser.add_argument("--toolkit-url", help="a deployed MCP toolkit's /mcp URL, to send questions to its agentic_search tool instead of running the service in this process (default: run in this process)")
+    parser.add_argument("--toolkit-app-id", help="client ID of the toolkit's Entra app, used to sign in to the toolkit; required in both modes")
     parser.add_argument("--resume-file", type=Path, help="an earlier run's file; reruns only its failed or missing questions")
     parser.add_argument("--output-file", type=Path, help="where to write this run (default: .live-data/benchmark-runs/<collection>-<time>.json)")
     parser.add_argument("--workers", type=int, default=4, help="number of questions run in parallel (default: %(default)s)")
@@ -320,10 +309,8 @@ def main() -> None:
             parser.error("--collection is required")
         if settings["container"] is None:
             parser.error("--container is required")
-        if (settings["account_uri"] is None) == (settings["toolkit_url"] is None):
-            parser.error("give either --account-uri or --toolkit-url")
-        if settings["toolkit_url"] and not settings["toolkit_app_id"]:
-            parser.error("--toolkit-url needs --toolkit-app-id")
+        if not settings["toolkit_app_id"]:
+            parser.error("--toolkit-app-id is required")
         kept = []
 
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")

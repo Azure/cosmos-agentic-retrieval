@@ -17,31 +17,20 @@ QuestionT = TypeVar("QuestionT", bound=Question)
 
 
 @dataclass(frozen=True)
-class ReturnedDocument:
-    """One document the agent returned, with its text fields keyed by path, e.g. "/title"."""
-
-    id: str
-    fields: dict[str, str]
-    # The document a chunk belongs to, when the container stores documents as chunks.
-    parent_id: str | None = None
-
-
-@dataclass(frozen=True)
 class AgentResponse:
-    """The agent's answer and the documents it returned for one question."""
+    """The agent's answer and the Cosmos DB item IDs of the documents it returned for one question."""
 
     answer: str
-    documents: list[ReturnedDocument]
+    # Returned documents hold only the fields the agent's searches selected, so
+    # evaluators look these IDs up in the collection's data instead.
+    document_ids: list[str]
 
     @classmethod
     def from_response_body(cls, body: dict[str, Any]) -> AgentResponse:
-        """Read the answer and documents from an /agentic_search response body."""
+        """Read the answer and document IDs from an /agentic_search response body."""
         return cls(
             answer=body.get("answer") or "",
-            documents=[
-                ReturnedDocument(d["item_id"], d.get("text_fields", {}), d.get("parent_document_id"))
-                for d in body.get("documents", [])
-            ],
+            document_ids=[d["id"] for d in body.get("documents", [])],
         )
 
 

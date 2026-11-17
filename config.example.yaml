@@ -1,30 +1,21 @@
-# Cosmos DB account and the database that holds the containers to search.
-account_uri: https://YOUR-ACCOUNT.documents.azure.com:443/
-cosmos_database: YOUR-DATABASE
-# How to sign in to Cosmos DB: "default" uses the managed identity in Azure and your az login locally.
-cosmos_credential: default
-
 # OpenAI-compatible chat model.
 llm_base_url: https://YOUR-ENDPOINT/v1
 llm_model: YOUR-MODEL
 # Extra options sent with each model call, such as {temperature: 0}.
 llm_params: {}
+# Retries after the initial model request; the SDK handles backoff and jitter.
+llm_max_retries: 6
 # Maximum model turns, and maximum documents returned, per question.
 agent_max_turns: 6
 agent_max_documents: 10
 
-# Containers to search, keyed by container name.
-cosmos_containers:
-  articles:
-    cosmos_schema:
-      # Path to each item's ID.
-      item_id_path: /id
-      # The container's partition key paths.
-      partition_key_paths: ["/tenant"]
-      # Text fields to search and return. With more than one, set search_text_fields.
-      text_paths: ["/text"]
-  reports:
-    cosmos_schema:
-      item_id_path: /id
-      partition_key_paths: ["/tenant"]
-      text_paths: ["/content/body"]
+# The deploy script sets TOOLKIT_APP_ID; local runs must supply it explicitly.
+toolkit_mcp_url: http://127.0.0.1:8080/mcp
+
+# How toolkit results are trimmed before the agent reads them. Search results
+# shorten text values to this many characters (the agent can ask for full text).
+tool_result_text_limit: 512
+# Lists of at least this many numbers are treated as embeddings and left out.
+tool_result_min_vector_dim: 128
+# Fields left out of every result: by default, Cosmos DB's internal system fields.
+tool_result_dropped_fields: [_rid, _self, _etag, _attachments]

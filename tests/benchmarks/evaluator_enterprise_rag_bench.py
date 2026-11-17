@@ -34,7 +34,7 @@ facts that name the context, such as the team. ERB's code is under this notice:
 import json
 import re
 
-from dataset_enterprise_rag_bench import ERBQuestion
+from dataset_enterprise_rag_bench import ERBDocument, ERBQuestion
 from evaluation_contracts import AgentResponse, EvaluationResult, Evaluator
 
 ANSWER_WHOLISTIC_EVALUATION_PROMPT = """
@@ -147,12 +147,7 @@ class ERBEvaluator(Evaluator[ERBQuestion]):
 
     def read_returned_doc_ids(self, response: AgentResponse) -> set[str]:
         """ERB document IDs of the returned chunks; several chunks of one document count once."""
-        if any(d.parent_id is None for d in response.documents):
-            raise ValueError(
-                "returned documents have no parent document ID; "
-                "configure the container with parent_document_id_path=/doc_id"
-            )
-        return {d.parent_id for d in response.documents if d.parent_id is not None}
+        return {ERBDocument.read_doc_id(passage_id) for passage_id in response.document_ids}
 
     def judge_correctness(
         self, question: ERBQuestion, answer: str, judge_tokens: dict[str, int | None]

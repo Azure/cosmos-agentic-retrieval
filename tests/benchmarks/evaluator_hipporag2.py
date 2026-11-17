@@ -10,8 +10,8 @@ import re
 import string
 from collections import Counter
 
-from dataset_hipporag2 import HippoRAGQuestion
-from evaluation_contracts import AgentResponse, EvaluationResult, Evaluator
+from dataset_hipporag2 import HippoRAG2Collection, HippoRAGQuestion
+from evaluation_contracts import AgentResponse, EvaluationResult, Evaluator, Judge
 
 JUDGE_PROMPT = """Question: {question}
 Accepted answers: {answers}
@@ -57,6 +57,13 @@ class HippoRAGEvaluator(Evaluator[HippoRAGQuestion]):
 
     name = "hipporag2"
 
+    def __init__(self, judge: Judge):
+        super().__init__(judge)
+        # Each HippoRAG 2 document is stored as one passage with the same ID.
+        self.titles_by_id = {
+            d.id: d.title for d in HippoRAG2Collection().read_merged_corpus_documents()
+        }
+
     def evaluate(self, question: HippoRAGQuestion, response: AgentResponse) -> EvaluationResult:
         answer = response.answer
         if answer:
@@ -67,7 +74,7 @@ class HippoRAGEvaluator(Evaluator[HippoRAGQuestion]):
             judge_score = float(verdict.strip().lower().startswith("correct"))
         else:
             judge_score, judge_tokens = 0.0, {"prompt_tokens": 0, "completion_tokens": 0}
-        titles = [d.fields.get("/title", "") for d in response.documents]
+        titles = [self.titles_by_id[i] for i in response.document_ids if i in self.titles_by_id]
         return EvaluationResult(
             scores={
                 "exact_match": compute_exact_match(answer, question.answers),

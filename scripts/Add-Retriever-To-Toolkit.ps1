@@ -16,11 +16,16 @@
        on the Azure OpenAI or Azure AI Foundry resource (-ModelResourceId). That
        resource hosts the chat model set as llm_model in the configuration, which
        the service uses to plan searches and write answers.
-    3. Adds the "retriever" container to the app, or updates it if it exists.
+    3. Gives the app's managed identity the Mcp.Tool.Executor role on the
+       toolkit's Entra app, so the service can call the toolkit's MCP tools.
+       This needs an owner of that Entra app; the toolkit's deployment makes
+       whoever deployed it an owner.
+    4. Adds the "retriever" container to the app, or updates it if it exists,
+       and passes it the toolkit's Entra app ID (TOOLKIT_APP_ID).
 
-    The service signs in to Cosmos DB and to the chat model with the app's
-    managed identity, so the configuration file must not contain keys
-    (cosmos_key or llm_api_key).
+    The service authenticates with the chat model and the toolkit with the
+    app's managed identity, so the configuration file must not contain a key
+    (llm_api_key).
 
 .EXAMPLE
     .\scripts\Add-Retriever-To-Toolkit.ps1 -ResourceGroup my-rg -ContainerAppName my-mcp-toolkit -ConfigFile .\config.deploy.yaml -ModelResourceId /subscriptions/.../accounts/my-foundry
@@ -63,8 +68,8 @@ $ErrorActionPreference = "Stop"
 
 # Check the configuration has no keys: it is copied into the image, where anyone who can pull the image can read it
 $configPath = (Resolve-Path $ConfigFile).Path
-if (Select-String -Path $configPath -Pattern '^\s*(cosmos_key|llm_api_key)\s*:' -Quiet) {
-    throw "'$ConfigFile' contains cosmos_key or llm_api_key. Remove them; the service signs in with the app's managed identity."
+if (Select-String -Path $configPath -Pattern '^\s*llm_api_key\s*:' -Quiet) {
+    throw "'$ConfigFile' contains llm_api_key. Remove it; the service signs in with the app's managed identity."
 }
 
 # Read the toolkit app, and check it is a toolkit app with a managed identity
@@ -77,6 +82,11 @@ if ($ContainerAppName -notin $app.properties.template.containers.name) {
 }
 $principalId = $app.identity.principalId
 if (-not $principalId) { throw "App '$ContainerAppName' has no managed identity" }
+
+# The toolkit's deployment stores its Entra app's client ID in the toolkit container's settings
+$toolkitContainer = $app.properties.template.containers | Where-Object { $_.name -eq $ContainerAppName }
+$toolkitAppId = ($toolkitContainer.env | Where-Object { $_.name -eq "AzureAd__ClientId" }).value
+if (-not $toolkitAppId) { throw "The toolkit container has no AzureAd__ClientId setting. Was the toolkit deployed with Entra sign-in?" }
 
 # Name the images: the pushed image goes to the app's own registry
 $registry = $app.properties.configuration.registries[0].server
@@ -115,10 +125,32 @@ if (@($assignments).Count -eq 0) {
     if ($LASTEXITCODE -ne 0) { throw "Granting '$role' on '$ModelResourceId' failed" }
 }
 
+# Let the app's managed identity call the toolkit's MCP endpoint, unless it already can
+$toolkitSp = az ad sp show --id $toolkitAppId --output json | ConvertFrom-Json
+if ($LASTEXITCODE -ne 0) { throw "Reading the toolkit's Entra app '$toolkitAppId' failed" }
+$toolRoleId = ($toolkitSp.appRoles | Where-Object { $_.value -eq "Mcp.Tool.Executor" }).id
+if (-not $toolRoleId) { throw "The toolkit's Entra app '$toolkitAppId' has no Mcp.Tool.Executor role" }
+$graphUrl = "https://graph.microsoft.com/v1.0/servicePrincipals/$principalId/appRoleAssignments"
+$granted = (az rest --method GET --url $graphUrl --output json | ConvertFrom-Json).value
+if ($LASTEXITCODE -ne 0) { throw "Reading the app's role assignments failed" }
+if (-not ($granted | Where-Object { $_.resourceId -eq $toolkitSp.id -and $_.appRoleId -eq $toolRoleId })) {
+    # Sent from a file: on Windows, az runs through cmd.exe, which mangles inline JSON
+    $bodyFile = [System.IO.Path]::GetTempFileName()
+    @{ principalId = $principalId; resourceId = $toolkitSp.id; appRoleId = $toolRoleId } |
+        ConvertTo-Json | Out-File -FilePath $bodyFile -Encoding utf8 -NoNewline
+    az rest --method POST --url $graphUrl --headers "Content-Type=application/json" --body "@$bodyFile" --output none
+    $grantExitCode = $LASTEXITCODE
+    Remove-Item $bodyFile
+    if ($grantExitCode -ne 0) {
+        throw "Granting Mcp.Tool.Executor on the toolkit's Entra app failed. Run the script as an owner of that app."
+    }
+}
+
 # Add the "retriever" container to the app, or switch an existing one to the new image
 az containerapp update --name $ContainerAppName --resource-group $ResourceGroup `
-    --container-name retriever --image $image --cpu 0.25 --memory 0.5Gi --output none
+    --container-name retriever --image $image --cpu 0.25 --memory 0.5Gi `
+    --set-env-vars "TOOLKIT_APP_ID=$toolkitAppId" --output none
 if ($LASTEXITCODE -ne 0) { throw "Adding the retriever container failed" }
 
-Write-Host "Retriever added to '$ContainerAppName'. The new role on '$ModelResourceId' can take a few minutes to take effect. To see the retriever's logs:"
+Write-Host "Retriever added to '$ContainerAppName'. New roles can take a few minutes to take effect. To see the retriever's logs:"
 Write-Host "  az containerapp logs show --name $ContainerAppName --resource-group $ResourceGroup --container retriever --tail 50"

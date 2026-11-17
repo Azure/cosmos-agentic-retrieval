@@ -51,22 +51,20 @@ export LLM_API_KEY='<key>'
 
 There are two ways to run the questions.
 
-**In-process** (default). `run.py` starts the service inside its own process,
-pointed at the corpus container you loaded above. The model variables are used
-for the agent, and Cosmos DB is reached with your `az login`:
+**In-process** (default). `run.py` starts the service inside its own process. Its
+agent searches the corpus container you loaded above through the MCP toolkit at
+`TOOLKIT_MCP_URL` (default `http://127.0.0.1:8080/mcp`), signed in with your
+`az login`. The model variables are used for the agent:
 
 ```bash
-python tests/benchmarks/run.py --account-uri https://<account>.documents.azure.com:443/ \
+python tests/benchmarks/run.py --toolkit-app-id <toolkit-entra-app-client-id> \
     --collection hipporag2 --container hipporag2-full --questions-per-dataset 100 --workers 8
 ```
 
 **Through a deployed toolkit**. `run.py` calls the toolkit's `agentic_search` MCP
 tool, signed in with your `az login`. The agent runs in the deployed retriever
-with that deployment's own configuration (model, turn limit and containers);
-the model variables are not used. The retriever must be configured to search
-the corpus container; for ERB, its schema must also set
-`parent_document_id_path: /doc_id` and `chunk_order_path: /chunk_idx`, which
-`run.py` sets for in-process runs:
+with that deployment's own configuration (model and turn limit); the model
+variables are not used:
 
 ```bash
 python tests/benchmarks/run.py --toolkit-url https://<toolkit-app>/mcp \

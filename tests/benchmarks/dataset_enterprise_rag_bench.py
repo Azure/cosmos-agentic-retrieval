@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections import Counter
 from dataclasses import dataclass
 from typing import ClassVar
@@ -55,6 +56,12 @@ class ERBDocument(Document):
                 split_text_into_chunks(self.text, self.CHUNK_MAX_TOKENS, self.CHUNK_OVERLAP_TOKENS)
             )
         ]
+
+    @staticmethod
+    def read_doc_id(passage_id: str) -> str:
+        """The ERB document ID of a passage ID made by get_passages, e.g. "abc-copy2-3" -> "abc"."""
+        stored_id = passage_id.rsplit("-", 1)[0]
+        return re.sub(r"-copy\d+$", "", stored_id)
 
 
 @dataclass(frozen=True)
@@ -115,11 +122,6 @@ class EnterpriseRAGBench(HFBenchmarkDataset):
 class EnterpriseRAGBenchCollection(BenchmarkCollection):
     name = "enterprise-rag-bench"
     datasets = (EnterpriseRAGBench(),)
-    # Tells the service which ERBPassage fields link a chunk to its document.
-    chunk_schema: ClassVar[dict[str, str]] = {
-        "parent_document_id_path": "/doc_id",
-        "chunk_order_path": "/chunk_idx",
-    }
 
 
 if __name__ == "__main__":

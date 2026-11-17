@@ -1,22 +1,17 @@
-"""Configure retrieval over an explicit set of containers in one database.
+"""Configure the agentic-search service.
 
-`RetrieverConfig` is a pydantic-settings model: each field is read from the
-matching uppercased environment variable at startup (`ACCOUNT_URI`,
-`COSMOS_DATABASE`, `COSMOS_CONTAINERS`, ...), loaded by `get_config()`.
+`AgenticSearchConfig` is a pydantic-settings model: each field is read from the
+matching uppercased environment variable at startup (`LLM_BASE_URL`,
+`LLM_MODEL`, `TOOLKIT_APP_ID`, ...), loaded by `get_config()`.
 
-`COSMOS_CONTAINERS` populates the `cosmos_containers` field: a JSON object keyed
-by container name, e.g. `{"articles": {...}, "reports": {...}}`. Each entry
-declares that container's schema, search scope, and partition rules. All
-containers share the account credentials and query concurrency limit.
-
-The current release searches with full text only, so each container declares the
-text fields to search. Additional search modes will be added later.
+The service never reads Cosmos DB itself: the agent searches with the MCP
+toolkit's tools, and each request names the database and container to search.
 
 Alternatively, set `COSMOS_RETRIEVER_CONFIG_FILE` to a YAML file path to read the
 whole configuration from that file instead of many environment variables. Values
 in the file win; any field the file omits still falls back to its environment
-variable, so secrets like `COSMOS_KEY` can stay in the environment, or be
-dropped entirely when using CLI auth.
+variable, so secrets like `LLM_API_KEY` can stay in the environment, or be
+dropped entirely when signing in with Entra ID.
 
 The agent needs a model: `llm_base_url` and `llm_model` are required and point at
 any OpenAI-compatible endpoint. Put per-call model options such as `max_tokens`
@@ -26,61 +21,20 @@ the model unchanged.
 
 import os
 from pathlib import Path
-from typing import Any, Literal, Self
+from typing import Any, Literal
 
 import yaml
-from pydantic import (
-    AnyHttpUrl,
-    BaseModel,
-    ConfigDict,
-    Field,
-    SecretStr,
-    field_validator,
-    model_validator,
-)
+from pydantic import AnyHttpUrl, Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from cosmos_agentic_retriever.query_engine import CorpusSchema, QueryEngineConfig
-from cosmos_agentic_retriever.query_engine.types import PartitionQueryPolicy
+from cosmos_agentic_retriever.agent.result_trimming import DEFAULT_DROPPED_FIELDS
 
 
-class ContainerConfig(BaseModel):
-    """Schema and search scope for one container, independent of other containers."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    cosmos_schema: CorpusSchema
-    search_text_fields: list[str] | None = None
-    partition_key: Any | None = None
-    partition_policy: PartitionQueryPolicy = Field(default_factory=PartitionQueryPolicy)
-
-    @model_validator(mode="after")
-    def _searchable_fields(self) -> Self:
-        if not self.cosmos_schema.partition_key_paths:
-            raise ValueError("configure partition_key_paths for physical item identity")
-        if not self.cosmos_schema.resolve_text_fields(self.search_text_fields):
-            raise ValueError("configure at least one searchable text field")
-        if (
-            self.partition_key is None
-            and not self.partition_policy.allow_cross_partition_search
-        ):
-            raise ValueError(
-                "configure a partition key or allow cross-partition search"
-            )
-        return self
-
-
-class RetrieverConfig(BaseSettings):
-    """Startup settings. A Cosmos key takes precedence over the identity choice."""
+class AgenticSearchConfig(BaseSettings):
+    """Startup settings for the model, the toolkit, and the HTTP server."""
 
     model_config = SettingsConfigDict(extra="forbid")
 
-    account_uri: AnyHttpUrl
-    cosmos_database: str = Field(min_length=1, max_length=256)
-    cosmos_containers: dict[str, ContainerConfig] = Field(min_length=1)
-    cosmos_key: SecretStr | None = None
-    cosmos_credential: Literal["azure_cli", "default"] = "default"
-    query_engine: QueryEngineConfig = Field(default_factory=QueryEngineConfig)
     host: str = Field(default="127.0.0.1", min_length=1)
     port: int = Field(default=9000, ge=1, le=65535)
     log_level: Literal["debug", "info", "warning", "error", "critical"] = "info"
@@ -89,36 +43,29 @@ class RetrieverConfig(BaseSettings):
     # Without a key, the model is called with an Entra token from DefaultAzureCredential.
     llm_api_key: SecretStr | None = None
     llm_params: dict[str, Any] = Field(default_factory=dict)
+    llm_max_retries: int = Field(default=6, ge=0)
     agent_max_turns: int = Field(default=6, ge=1, le=50)
     agent_max_documents: int = Field(default=10, ge=1, le=50)
+    # Default: the toolkit container in the same Container App.
+    toolkit_mcp_url: AnyHttpUrl = AnyHttpUrl("http://127.0.0.1:8080/mcp")
+    # Client ID of the toolkit's Entra app; tokens for the toolkit are requested for it.
+    toolkit_app_id: str = Field(min_length=1)
+    # How toolkit results are trimmed before the agent reads them; see agent/result_trimming.py.
+    tool_result_text_limit: int = Field(default=512, ge=1)
+    tool_result_min_vector_dim: int = Field(default=128, ge=2)
+    tool_result_dropped_fields: list[str] = Field(
+        default_factory=lambda: list(DEFAULT_DROPPED_FIELDS)
+    )
 
-    @field_validator("cosmos_database")
+    @field_validator("toolkit_app_id")
     @classmethod
-    def _single_target(cls, value: str) -> str:
-        if not value.strip() or "*" in value:
-            raise ValueError("configure a database name, not a wildcard")
-        return value
-
-    @field_validator("cosmos_containers")
-    @classmethod
-    def _container_names(
-        cls, values: dict[str, ContainerConfig]
-    ) -> dict[str, ContainerConfig]:
-        if any(not name.strip() or "*" in name or len(name) > 256 for name in values):
-            raise ValueError(
-                "configure explicit container names, not blanks or wildcards"
-            )
-        return values
-
-    @field_validator("cosmos_key")
-    @classmethod
-    def _nonempty_key(cls, value: SecretStr | None) -> SecretStr | None:
-        if value is not None and not value.get_secret_value().strip():
-            raise ValueError("cosmos_key must not be empty")
+    def _toolkit_app_id(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("configure the toolkit's Entra app client ID")
         return value
 
 
-def get_config() -> RetrieverConfig:
+def get_config() -> AgenticSearchConfig:
     """Build the settings at startup from a YAML file or the environment.
 
     When `COSMOS_RETRIEVER_CONFIG_FILE` is set, its YAML contents are validated as
@@ -129,5 +76,5 @@ def get_config() -> RetrieverConfig:
     path = os.environ.get("COSMOS_RETRIEVER_CONFIG_FILE")
     if path:
         data = yaml.safe_load(Path(path).read_text()) or {}
-        return RetrieverConfig.model_validate(data)
-    return RetrieverConfig()
+        return AgenticSearchConfig.model_validate(data)
+    return AgenticSearchConfig()

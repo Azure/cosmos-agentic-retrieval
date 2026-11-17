@@ -27,8 +27,6 @@ from azure.cosmos import CosmosClient
 from azure.cosmos.exceptions import CosmosResourceExistsError
 from azure.identity import AzureCliCredential, DefaultAzureCredential
 
-from cosmos_agentic_retriever.config import RetrieverConfig
-
 DEFAULT_DATABASE = "mcp-live-tests-v1"
 FIXTURE_VERSION = "mcp-search-v1"
 SCIFACT_URL = (
@@ -44,9 +42,7 @@ MAX_ARCHIVE_BYTES = 8 * 1024 * 1024
 @dataclass(frozen=True)
 class ContainerFixture:
     name: str
-    schema: dict[str, Any]
     indexed_paths: tuple[str, ...]
-    search_fields: tuple[str, ...]
     items: tuple[dict[str, Any], ...]
 
     def full_text_policy(self) -> dict:
@@ -112,41 +108,9 @@ def fixtures() -> tuple[ContainerFixture, ...]:
             }
         )
     return (
-        ContainerFixture(
-            "flat-v1",
-            {
-                "item_id_path": "/id",
-                "partition_key_paths": ["/tenant"],
-                "text_paths": ["/text"],
-                "additional_return_paths": ["/year"],
-            },
-            ("/text",),
-            ("/text",),
-            tuple(flat),
-        ),
-        ContainerFixture(
-            "nested-v1",
-            {
-                "item_id_path": "/record/id",
-                "partition_key_paths": ["/tenant"],
-                "text_paths": ["/content/body"],
-                "additional_return_paths": ["/year"],
-            },
-            ("/content/body",),
-            ("/content/body",),
-            tuple(nested),
-        ),
-        ContainerFixture(
-            "fields-v1",
-            {
-                "item_id_path": "/id",
-                "partition_key_paths": ["/tenant"],
-                "text_paths": ["/title", "/body"],
-            },
-            ("/title", "/body"),
-            ("/body",),
-            tuple(multiple),
-        ),
+        ContainerFixture("flat-v1", ("/text",), tuple(flat)),
+        ContainerFixture("nested-v1", ("/content/body",), tuple(nested)),
+        ContainerFixture("fields-v1", ("/title", "/body"), tuple(multiple)),
     )
 
 
@@ -219,18 +183,7 @@ def load_scifact(path: Path) -> RealCorpus:
         json.dumps(selection, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
     return RealCorpus(
-        ContainerFixture(
-            SCIFACT_CONTAINER,
-            {
-                "item_id_path": "/id",
-                "partition_key_paths": ["/tenant"],
-                "text_paths": ["/title", "/text"],
-                "additional_return_paths": ["/source"],
-            },
-            ("/title", "/text"),
-            ("/title", "/text"),
-            items,
-        ),
+        ContainerFixture(SCIFACT_CONTAINER, ("/title", "/text"), items),
         selected_queries,
         digest,
     )
@@ -318,32 +271,6 @@ def read_fixture_items(container, fixture: ContainerFixture) -> list[dict]:
             parameters=[{"name": "@limit", "value": len(fixture.items) + 1}],
             enable_cross_partition_query=True,
         )
-    )
-
-
-def service_settings(
-    endpoint: str,
-    database: str,
-    credential: str,
-    *,
-    selected: tuple[ContainerFixture, ...] | None = None,
-) -> RetrieverConfig:
-    """Build service settings for the selected fixture containers."""
-    selected = fixtures() if selected is None else selected
-    return RetrieverConfig(
-        account_uri=endpoint,
-        cosmos_database=validate_database_name(database),
-        cosmos_key=None,
-        cosmos_credential=credential,
-        llm_base_url="https://model.example.com/v1",
-        llm_model="test-model",
-        cosmos_containers={
-            fixture.name: {
-                "cosmos_schema": fixture.schema,
-                "search_text_fields": list(fixture.search_fields),
-            }
-            for fixture in selected
-        },
     )
 
 

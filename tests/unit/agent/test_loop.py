@@ -8,11 +8,13 @@ import pytest
 
 from cosmos_agentic_retriever.agent.loop import (
     LlmTurn,
+    ModelError,
     TokenUsage,
-    Tool,
-    ToolCall,
     run_agent_search,
 )
+from cosmos_agentic_retriever.agent.tool_contracts import InvalidToolCall, Tool, ToolCall
+
+pytestmark = pytest.mark.anyio
 
 
 def test_token_usage_sum_is_unknown_when_either_count_is_unknown():
@@ -56,15 +58,15 @@ class _ScriptedModel:
         self._turns = list(turns)
         self.messages_seen: list[list[dict]] = []
 
-    def __call__(self, messages, tools):
+    async def __call__(self, messages, tools):
         self.messages_seen.append([dict(message) for message in messages])
         return self._turns.pop(0)
 
 
 def _echo_tool(record: list[dict]) -> Tool:
-    def handler(arguments: dict) -> str:
-        record.append(arguments)
-        return f"searched {arguments.get('query')!r}"
+    async def handler(calls: list[dict]) -> list[str]:
+        record.extend(calls)
+        return [f"searched {arguments.get('query')!r}" for arguments in calls]
 
     return Tool(
         name="full_text_search",
@@ -74,9 +76,9 @@ def _echo_tool(record: list[dict]) -> Tool:
     )
 
 
-def test_answers_without_searching_stops():
+async def test_answers_without_searching_stops():
     model = _ScriptedModel([_answer("done")])
-    result = run_agent_search(
+    result = await run_agent_search(
         "q",
         complete=model,
         tools=[_echo_tool([])],
@@ -88,12 +90,12 @@ def test_answers_without_searching_stops():
     assert result.turns == 1
 
 
-def test_searches_then_answers():
+async def test_searches_then_answers():
     calls: list[dict] = []
     model = _ScriptedModel(
         [_call("c1", "full_text_search", {"query": "cats"}), _answer("final")]
     )
-    result = run_agent_search(
+    result = await run_agent_search(
         "q",
         complete=model,
         tools=[_echo_tool(calls)],
@@ -106,11 +108,16 @@ def test_searches_then_answers():
     assert result.turns == 2
     roles = [message["role"] for message in result.messages]
     assert roles == ["system", "user", "assistant", "tool", "assistant"]
+    [response] = result.tool_responses
+    assert response.call_id == "c1"
+    assert response.content == "searched 'cats'"
+    assert response.error is None
+    assert response.tool_implementation == "full_text_search"
 
 
-def test_stops_at_max_turns_when_model_keeps_calling():
+async def test_stops_at_max_turns_when_model_keeps_calling():
     model = _ScriptedModel([_call(f"c{i}", "full_text_search", {"query": "x"}) for i in range(5)])
-    result = run_agent_search(
+    result = await run_agent_search(
         "q",
         complete=model,
         tools=[_echo_tool([])],
@@ -121,11 +128,11 @@ def test_stops_at_max_turns_when_model_keeps_calling():
     assert result.turns == 3
 
 
-def test_unknown_tool_yields_error_observation_and_continues():
+async def test_unknown_tool_yields_error_observation_and_continues():
     model = _ScriptedModel(
         [_call("c1", "does_not_exist", {"query": "x"}), _answer("ok")]
     )
-    result = run_agent_search(
+    result = await run_agent_search(
         "q",
         complete=model,
         tools=[_echo_tool([])],
@@ -134,12 +141,39 @@ def test_unknown_tool_yields_error_observation_and_continues():
     )
     tool_messages = [m for m in result.messages if m["role"] == "tool"]
     assert "unknown tool" in tool_messages[0]["content"]
+    assert result.tool_responses[0].error == "unknown tool: does_not_exist"
     assert result.terminal_reason == "stop"
     assert result.answer == "ok"
 
 
-def test_tool_exception_becomes_error_observation():
-    def boom(_arguments: dict) -> str:
+async def test_invalid_arguments_are_reported_without_running_the_tool():
+    calls: list[dict] = []
+    invalid = InvalidToolCall("c1", "full_text_search", "broken", "not valid JSON.")
+    turn = LlmTurn(
+        message={"role": "assistant", "content": "", "tool_calls": []},
+        content="",
+        tool_calls=[invalid],
+    )
+    model = _ScriptedModel([turn, _answer("ok")])
+    result = await run_agent_search(
+        "q",
+        complete=model,
+        tools=[_echo_tool(calls)],
+        system_prompt="sys",
+        max_turns=5,
+    )
+    tool_messages = [m for m in result.messages if m["role"] == "tool"]
+    assert calls == []
+    assert tool_messages == [
+        {"role": "tool", "tool_call_id": "c1", "content": "Error: not valid JSON."}
+    ]
+    assert result.tool_responses[0].error == "not valid JSON."
+    assert result.tool_calls == {"full_text_search": 1}
+    assert result.answer == "ok"
+
+
+async def test_tool_exception_becomes_error_observation():
+    async def boom(_calls: list[dict]) -> list[str]:
         raise RuntimeError("kaboom")
 
     tool = Tool(
@@ -151,7 +185,7 @@ def test_tool_exception_becomes_error_observation():
     model = _ScriptedModel(
         [_call("c1", "full_text_search", {"query": "x"}), _answer("recovered")]
     )
-    result = run_agent_search(
+    result = await run_agent_search(
         "q", complete=model, tools=[tool], system_prompt="sys", max_turns=5
     )
     tool_messages = [m for m in result.messages if m["role"] == "tool"]
@@ -159,11 +193,12 @@ def test_tool_exception_becomes_error_observation():
     assert result.terminal_reason == "stop"
 
 
-def test_model_error_ends_episode():
+async def test_model_error_ends_episode():
+    error = ModelError("rate_limit", "The search model is busy.", 429, 20)
     model = _ScriptedModel(
-        [LlmTurn(message={"role": "assistant", "content": ""}, error="boom")]
+        [LlmTurn(message={"role": "assistant", "content": ""}, error=error)]
     )
-    result = run_agent_search(
+    result = await run_agent_search(
         "q",
         complete=model,
         tools=[_echo_tool([])],
@@ -172,12 +207,13 @@ def test_model_error_ends_episode():
     )
     assert result.terminal_reason == "error"
     assert result.turns == 1
+    assert result.error == error
 
 
-def test_rejects_duplicate_tool_names():
+async def test_rejects_duplicate_tool_names():
     tool = _echo_tool([])
     with pytest.raises(ValueError, match="unique"):
-        run_agent_search(
+        await run_agent_search(
             "q",
             complete=_ScriptedModel([_answer("x")]),
             tools=[tool, tool],
@@ -186,9 +222,9 @@ def test_rejects_duplicate_tool_names():
         )
 
 
-def test_rejects_nonpositive_max_turns():
+async def test_rejects_nonpositive_max_turns():
     with pytest.raises(ValueError, match="max_turns"):
-        run_agent_search(
+        await run_agent_search(
             "q",
             complete=_ScriptedModel([_answer("x")]),
             tools=[_echo_tool([])],

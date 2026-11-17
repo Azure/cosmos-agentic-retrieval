@@ -11,8 +11,7 @@ import uvicorn
 from pydantic import ValidationError
 from pydantic_settings import SettingsError
 
-from cosmos_agentic_retriever.config import RetrieverConfig, get_config
-from cosmos_agentic_retriever.query_engine.types import RetrievalError
+from cosmos_agentic_retriever.config import AgenticSearchConfig, get_config
 from cosmos_agentic_retriever.server import create_app
 
 
@@ -40,9 +39,9 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     }
     if overrides:
         values = {
-            name: getattr(settings, name) for name in RetrieverConfig.model_fields
+            name: getattr(settings, name) for name in AgenticSearchConfig.model_fields
         }
-        settings = RetrieverConfig(**{**values, **overrides})
+        settings = AgenticSearchConfig(**{**values, **overrides})
     app = create_app(settings)
     uvicorn.run(
         app, host=settings.host, port=settings.port, log_level=settings.log_level
@@ -54,9 +53,9 @@ def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     try:
         return _cmd_serve(args)
-    except (ValidationError, SettingsError, RetrievalError):
+    except (ValidationError, SettingsError):
         print(
-            "Invalid service configuration. Check the connection, schema, and server settings.",
+            "Invalid service configuration. Check the model, toolkit, and server settings.",
             file=sys.stderr,
         )
         return 1

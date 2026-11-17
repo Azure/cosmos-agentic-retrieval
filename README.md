@@ -1,8 +1,8 @@
 # Azure Cosmos DB Agentic Retrieval (Private Preview)
 
-This repository provides an agentic-search service over configured Cosmos DB
-containers. Users can ask an agent a natural-language question, which searches
-the Cosmos DB containers and returns the answer with its supporting documents.
+This repository provides an agentic-search service for Cosmos DB. Users can ask
+an agent a natural-language question; the agent searches with the Azure Cosmos
+DB MCP Toolkit's tools and returns the answer with its supporting documents.
 
 This feature is exposed as the `agentic_search` tool of the Azure Cosmos DB MCP
 Toolkit. This feature is currently in preview.
@@ -32,25 +32,16 @@ cd cosmos-agentic-retrieval
 Copy-Item config.example.yaml config.deploy.yaml
 ```
 
-In `config.deploy.yaml`, fill in your account, database, model, and containers.
-The following are required:
+In `config.deploy.yaml`, fill in your model. The following are required:
 
 ```yaml
-account_uri: https://YOUR-ACCOUNT.documents.azure.com:443/
-cosmos_database: YOUR-DATABASE
 llm_base_url: https://YOUR-ENDPOINT/openai/v1
 llm_model: YOUR-MODEL
-cosmos_containers:
-  YOUR-CONTAINER:
-    cosmos_schema:
-      item_id_path: /id
-      partition_key_paths: ["/YOUR-PARTITION-KEY"]
-      text_paths: ["/YOUR-TEXT-FIELD"]
 ```
 
-The service signs in to Cosmos DB and the model with the app's managed identity.
-It is built into the service's image; the script refuses a file with
-`cosmos_key` or `llm_api_key`.
+The service calls the model and the toolkit with the app's managed identity.
+The configuration is built into the service's image; the script refuses a file
+with `llm_api_key`.
 
 ### Step 3: Add the service to the toolkit app
 
@@ -64,15 +55,20 @@ hosts the model:
 ```
 
 The script builds the service image with the configuration inside, pushes it to
-the toolkit's registry, lets the app's managed identity call the model, and adds
-the service as a second container in the app. On networks that block PyPI, add
-`-PipIndexUrl <mirror>` to install packages from a mirror.
+the toolkit's registry, lets the app's managed identity call the model and the
+toolkit's MCP tools, and adds the service as a second container in the app.
+Run it as an owner of the toolkit's Entra app; whoever deployed the toolkit is
+one. On networks that block PyPI, add `-PipIndexUrl <mirror>` to install
+packages from a mirror.
 
 ### Step 4: Try it
 
 Connect an MCP client such as VS Code to the toolkit, as described in the
 [toolkit's README](https://github.com/AzureCosmosDB/MCPToolKit#vs-code-configuration),
 and ask a question that uses `agentic_search`. 
+
+Specify a `database` and, optionally, a `container` to limit the search.
+Omit both to let the agent discover where to search.
 
 
 ## Updating the configuration
@@ -82,12 +78,14 @@ Step 3 again. It builds a new image and replaces the service's container.
 
 ## Limitations
 
-- *Full-text search only.* Vector and hybrid search are not supported yet.
+- *Vector and hybrid search.* Require indexed stored embeddings and a matching
+  embedding model configured in the toolkit.
 - *Read-only.* The service never creates or changes databases, containers,
   indexes, or documents.
 - *Shares access control with MCP Toolkit.* Only callers allowed to use
 `agentic_search` through the MCP Toolkit reach the service, which listens only
-inside the app. 
+inside the app. Searches use the toolkit's Cosmos permissions, not the individual
+caller's.
 
 ## Run Locally for Testing
 
@@ -99,6 +97,8 @@ python -m pip install .
 cp config.example.yaml config.local.yaml    # fill in as in Step 2
 az login
 export COSMOS_RETRIEVER_CONFIG_FILE=./config.local.yaml
+export TOOLKIT_APP_ID=YOUR-TOOLKIT-ENTRA-APP-CLIENT-ID
+export TOOLKIT_MCP_URL=http://127.0.0.1:8080/mcp
 python -m cosmos_agentic_retriever serve
 ```
 

@@ -1,9 +1,10 @@
-# Live Cosmos Search Tests
+# Live Agent Tests
 
-These tests run the Python HTTP handlers and query engine against a real Cosmos
-DB for NoSQL account. Assumes an account you can provision into and a signed-in
-identity with the needed permissions. Run from the package directory after
-`python -m pip install -e '.[dev]'` and `az login`.
+These tests run the agent against a real model, a running MCP toolkit, and
+prepared containers in a real Cosmos DB for NoSQL account. Assumes an account
+you can provision into and a signed-in identity with the needed permissions. Run
+from the package directory after `python -m pip install -e '.[dev]'` and
+`az login`.
 
 ## Setup
 
@@ -44,22 +45,25 @@ export COSMOS_TEST_ENDPOINT='https://ACCOUNT.documents.azure.com:443/'  # from s
 export COSMOS_TEST_DATABASE='mcp-live-tests-v1'                         # from setup output
 export COSMOS_TEST_CREDENTIAL='azure_cli'                               # from setup output
 export COSMOS_TEST_SCIFACT_ARCHIVE="$PWD/.live-data/scifact.zip"        # from setup output
-RUN_COSMOS_LIVE=1 python -m pytest tests/end_to_end/test_cosmos_search_integration.py -q
 ```
 
-Use the same dataset file and code version you set up with.
+Use the same dataset file and code version you set up with. The tests check
+that the fixtures are present and unchanged before using them.
 
-To test the agent, also set `COSMOS_TEST_LLM_BASE_URL` to the model's
-OpenAI-compatible API base URL and `COSMOS_TEST_LLM_MODEL` to its model or
-deployment name. Set `COSMOS_TEST_LLM_API_KEY` in the environment if the endpoint
-requires a key, then run:
+Also set `COSMOS_TEST_LLM_BASE_URL` to the model's OpenAI-compatible API base
+URL and `COSMOS_TEST_LLM_MODEL` to its model or deployment name. Set
+`COSMOS_TEST_LLM_API_KEY` in the environment if the endpoint requires a key.
+Set `TOOLKIT_TEST_URL` to a running toolkit's `/mcp` URL and
+`TOOLKIT_TEST_APP_ID` to its Entra app client ID. The toolkit's identity must be
+able to read the fixture database. The Python service uses the current Azure
+sign-in for toolkit tokens. Then run:
 
 ```bash
 RUN_COSMOS_LIVE=1 python -m pytest tests/end_to_end/test_agent_integration.py -q
 ```
 
-This calls a real model and Cosmos through the Python test client. It does not
-run the .NET MCP server.
+This calls the real model and toolkit through the Python test client. It does
+not run the .NET MCP server.
 
 To test the full MCP path, put the .NET 9 SDK on `PATH` and run:
 
