@@ -1,21 +1,43 @@
 # Azure Cosmos DB Agentic Retrieval (Private Preview)
 
-This repository provides an agentic-search service for Cosmos DB. Users can ask
-an agent a natural-language question; the agent searches with the Azure Cosmos
-DB MCP Toolkit's tools and returns the answer with its supporting documents.
+This repository provides an agentic-search service for Azure Cosmos DB. It works
+with the [Azure Cosmos DB MCP Toolkit](https://github.com/AzureCosmosDB/MCPToolKit),
+called "the toolkit" in the rest of this README. Users can ask an agent a
+natural-language question; the agent searches with the toolkit's tools and
+returns the answer with its supporting documents.
 
-This feature is exposed as the `agentic_search` tool of the Azure Cosmos DB MCP
-Toolkit. This feature is currently in preview.
+This feature is exposed as the toolkit's `agentic_search` tool. It is currently
+in private preview; to join, fill in the
+[private preview form](https://forms.cloud.microsoft/r/eMm2ARSxnH).
 
 ## Prerequisites
 
-1. The Azure Cosmos DB MCP Toolkit vX.Y.Z or later, deployed to Azure Container
-   Apps.
-2. Cosmos DB containers whose searched fields have a
-   [full-text policy and index](https://learn.microsoft.com/azure/cosmos-db/gen-ai/full-text-search).
-3. A chat model deployment in Azure OpenAI or Azure AI Foundry.
-4. Tools: the same as the toolkit's deployment (Azure CLI, PowerShell 7+,
+### Required
+
+1. The toolkit, deployed to Azure Container Apps with Entra sign-in.
+   `agentic_search` is not in a toolkit release yet: deploy the toolkit's `main`
+   branch at commit [`6291283`](https://github.com/AzureCosmosDB/MCPToolKit/commit/6291283)
+   or later.
+2. A chat model deployment in Azure OpenAI or Azure AI Foundry.
+3. Tools: the same as the toolkit's deployment (Azure CLI, PowerShell 7+,
    Docker Desktop installed and running).
+
+### Recommended
+
+The agent searches with the toolkit's full-text, vector and hybrid search. Your cosmos DB
+containers need to be set up for the kinds of search you want it to use:
+
+- *Full-text search.* A
+  [full-text policy and index](https://learn.microsoft.com/azure/cosmos-db/gen-ai/full-text-search)
+  on the searched fields. Without them, searches still run but use more RUs and
+  are slower.
+- *Vector search.* Stored embeddings, with a
+  [vector policy](https://learn.microsoft.com/azure/cosmos-db/vector-search)
+  on the embedding field, and preferably a vector index. The toolkit must be
+  configured with the embedding model that produced the embeddings
+  (`OPENAI_ENDPOINT` and `OPENAI_EMBEDDING_DEPLOYMENT`).
+- *[Hybrid search](https://learn.microsoft.com/azure/cosmos-db/gen-ai/hybrid-search).*
+  Both of the above.
 
 ## Quick Start
 
@@ -26,13 +48,14 @@ git clone https://github.com/Azure/cosmos-agentic-retrieval.git
 cd cosmos-agentic-retrieval
 ```
 
-### Step 2: Configure 
+### Step 2: Configure
 
 ```powershell
 Copy-Item config.example.yaml config.deploy.yaml
 ```
 
-In `config.deploy.yaml`, fill in your model. The following are required:
+In `config.deploy.yaml`, fill in the model you want to use for agentic search.
+Both fields are required:
 
 ```yaml
 llm_base_url: https://YOUR-ENDPOINT/openai/v1
@@ -45,8 +68,8 @@ with `llm_api_key`.
 
 ### Step 3: Add the service to the toolkit app
 
-Use the resource group and Container App name of an existing Azure MCP Tool Kit
-app, and the resource ID of the Azure OpenAI or Azure AI Foundry resource that
+Use the resource group and Container App name of an existing toolkit app, and
+the resource ID of the Azure OpenAI or Azure AI Foundry resource that
 hosts the model:
 
 ```powershell
@@ -54,18 +77,26 @@ hosts the model:
   -ConfigFile .\config.deploy.yaml -ModelResourceId <model-resource-id>
 ```
 
+To find these values:
+
+- *Resource group and Container App name.* List your Container Apps:
+  `az containerapp list --output table`.
+- *Model resource ID.* In the Azure portal, open the Azure OpenAI or Azure AI
+  Foundry resource and select *JSON View* on its overview page, or run
+  `az cognitiveservices account show --name <resource-name> --resource-group <resource-group> --query id --output tsv`.
+
 The script builds the service image with the configuration inside, pushes it to
-the toolkit's registry, lets the app's managed identity call the model and the
-toolkit's MCP tools, and adds the service as a second container in the app.
-Run it as an owner of the toolkit's Entra app; whoever deployed the toolkit is
-one. On networks that block PyPI, add `-PipIndexUrl <mirror>` to install
-packages from a mirror.
+the existing toolkit's registry, lets the app's managed identity call the model
+and the toolkit's MCP tools, and adds the service as a second container in the
+app. You will need to run it as an owner of the toolkit's Entra app; whoever
+deployed the toolkit is an owner. On networks that block PyPI, add
+`-PipIndexUrl <mirror>` to install packages from a mirror.
 
 ### Step 4: Try it
 
 Connect an MCP client such as VS Code to the toolkit, as described in the
 [toolkit's README](https://github.com/AzureCosmosDB/MCPToolKit#vs-code-configuration),
-and ask a question that uses `agentic_search`. 
+and ask a question that uses `agentic_search`.
 
 Specify a `database` and, optionally, a `container` to limit the search.
 Omit both to let the agent discover where to search.
@@ -78,14 +109,12 @@ Step 3 again. It builds a new image and replaces the service's container.
 
 ## Limitations
 
-- *Vector and hybrid search.* Require indexed stored embeddings and a matching
-  embedding model configured in the toolkit.
 - *Read-only.* The service never creates or changes databases, containers,
   indexes, or documents.
-- *Shares access control with MCP Toolkit.* Only callers allowed to use
-`agentic_search` through the MCP Toolkit reach the service, which listens only
-inside the app. Searches use the toolkit's Cosmos permissions, not the individual
-caller's.
+- *Shares access control with the toolkit.* Only callers allowed to use
+  `agentic_search` through the toolkit reach the service, which listens only
+  inside the app. As with the toolkit's other tools, searches use the toolkit's
+  Cosmos permissions, not the individual caller's.
 
 ## Run Locally for Testing
 
@@ -98,7 +127,6 @@ cp config.example.yaml config.local.yaml    # fill in as in Step 2
 az login
 export COSMOS_RETRIEVER_CONFIG_FILE=./config.local.yaml
 export TOOLKIT_APP_ID=YOUR-TOOLKIT-ENTRA-APP-CLIENT-ID
-export TOOLKIT_MCP_URL=http://127.0.0.1:8080/mcp
 python -m cosmos_agentic_retriever serve
 ```
 
@@ -110,7 +138,7 @@ machine finds it there by default; see the toolkit's
 
 Results on the [HippoRAG 2](https://huggingface.co/datasets/osunlp/HippoRAG_2)
 collection: 1,000 questions each from five question-answering datasets, over one
-shared corpus of 45,881 passages. Run  with `gpt-5.6-luna` as agent and judge,
+shared corpus of 45,881 passages. Run with `gpt-5.6-luna` as agent and judge,
 full-text search only, at most 6 model turns and 10 documents per question. To
 run it yourself, see [tests/benchmarks](tests/benchmarks/README.md).
 

@@ -40,7 +40,7 @@ From another terminal, ask a question about one database:
 Add "container":"articles" to the JSON body to search only articles; omit
 "database" to let the agent discover where to search. The response contains an
 answer and the documents it used. This example sets maxDocuments to 5; the
-service's agent_max_documents setting also caps that number (default 10). Each
+service's agent_max_documents setting also caps that number (default 20). Each
 document identifies its database and container. If a tool call fails, the
 response includes that error. See the README to run the service and connect the
 MCP toolkit.
