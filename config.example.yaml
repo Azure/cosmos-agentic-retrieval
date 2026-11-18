@@ -1,13 +1,14 @@
 # OpenAI-compatible chat model.
-llm_base_url: https://YOUR-ENDPOINT/v1
+llm_base_url: https://YOUR-ENDPOINT/openai/v1
 llm_model: YOUR-MODEL
 # Extra options sent with each model call, such as {temperature: 0}.
 llm_params: {}
 # Retries after the initial model request; the SDK handles backoff and jitter.
 llm_max_retries: 6
-# Maximum model turns, and maximum documents returned, per question.
+# Maximum model turns per question.
 agent_max_turns: 6
-agent_max_documents: 10
+# Most documents returned per question (up to 50); a request's maxDocuments can only lower it.
+agent_max_documents: 20
 
 # The deploy script sets TOOLKIT_APP_ID; local runs must supply it explicitly.
 toolkit_mcp_url: http://127.0.0.1:8080/mcp

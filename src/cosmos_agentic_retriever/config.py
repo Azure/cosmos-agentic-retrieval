@@ -45,7 +45,7 @@ class AgenticSearchConfig(BaseSettings):
     llm_params: dict[str, Any] = Field(default_factory=dict)
     llm_max_retries: int = Field(default=6, ge=0)
     agent_max_turns: int = Field(default=6, ge=1, le=50)
-    agent_max_documents: int = Field(default=10, ge=1, le=50)
+    agent_max_documents: int = Field(default=20, ge=1, le=50)
     # Default: the toolkit container in the same Container App.
     toolkit_mcp_url: AnyHttpUrl = AnyHttpUrl("http://127.0.0.1:8080/mcp")
     # Client ID of the toolkit's Entra app; tokens for the toolkit are requested for it.
