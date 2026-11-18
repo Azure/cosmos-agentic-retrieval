@@ -6,7 +6,7 @@ llm_params: {}
 # Retries after the initial model request; the SDK handles backoff and jitter.
 llm_max_retries: 6
 # Maximum model turns per question.
-agent_max_turns: 6
+agent_max_turns: 10
 # Most documents returned per question (up to 50); a request's maxDocuments can only lower it.
 agent_max_documents: 20
 

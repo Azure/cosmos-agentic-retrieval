@@ -140,7 +140,7 @@ machine finds it there by default; see the toolkit's
 Results on the [HippoRAG 2](https://huggingface.co/datasets/osunlp/HippoRAG_2)
 collection: 1,000 questions each from five question-answering datasets, over one
 shared corpus of 45,881 passages. Run with `gpt-5.6-luna` as agent and judge,
-full-text search only, at most 6 model turns and 10 documents per question. To
+full-text search only, at most 10 model turns and 10 documents per question. To
 run it yourself, see [tests/benchmarks](tests/benchmarks/README.md).
 
 | Dataset | Judge accuracy | Gold passage recall | p50 latency | p99 latency |
