@@ -6,6 +6,8 @@ Results at commit `7ae43ad` (2026-11-18). The agent and the judge both use
 Costs are for the agent's model calls, at the Azure OpenAI Global Standard
 price for GPT-5.6-luna (short context) on the [Azure OpenAI pricing page][1]
 on 2026-11-18: $0.20 input, $0.02 cached input and $1.20 output per 1M tokens.
+Input, cached input and output token counts are those the model reports for
+each call; we apply these prices to them.
 
 [1]: https://azure.microsoft.com/en-us/pricing/details/cognitive-services/openai-service/
 
@@ -19,6 +21,7 @@ on 2026-11-18: $0.20 input, $0.02 cached input and $1.20 output per 1M tokens.
 | p50 latency (s)             | 15.6       |
 | p99 latency (s)             | 61.4       |
 | Avg tokens / question       | 20,329     |
+| Cached share of input       | 79%        |
 | Avg cost / question (USD)   | 0.00200    |
 
 ## HippoRAG 2
