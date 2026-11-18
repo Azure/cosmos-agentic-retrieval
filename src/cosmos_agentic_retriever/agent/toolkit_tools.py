@@ -11,17 +11,18 @@ Search tools (`text_search`, `vector_search`, `hybrid_search`,
 toolkit. Other tools return full text.
 
 This is the per-question policy layer, not another query engine. ToolkitClient
-owns transport; these handlers enforce request scope, retain evidence before
-shortening, and recognize toolkit error envelopes. The agent loop only receives
+owns transport; these handlers enforce request scope, record which documents
+were retrieved, and recognize toolkit error envelopes. The agent loop only receives
 Tool objects and never needs to know that their handlers call MCP.
 """
 
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
-from typing import Any
+from typing import Any, ClassVar
 
 from cosmos_agentic_retriever.agent.result_trimming import ResultTrimmer, TrimRules
 from cosmos_agentic_retriever.agent.tool_contracts import Tool, ToolExecutionResult
@@ -227,17 +228,20 @@ class SearchScope:
 
 @dataclass
 class SearchEvidence:
-    """Keep support for the final answer independently of model-facing previews.
+    """Track which documents the toolkit actually returned for one question.
 
-    Created per question, it retains full cleaned documents before shortening,
-    identifies sources by database/container/id, and keeps failures visible to
-    the caller. Schema and listing results are not supporting documents.
+    The answer's citations are checked against these, so the caller only gets
+    references to documents that were retrieved. Sources are identified by
+    database/container/id, and failures stay visible to the caller. Schema and
+    listing results are not supporting documents.
     """
 
-    rules: TrimRules
+    # Cosmos DB names and ids cannot contain "/", so [database/container/id] parses unambiguously.
+    CITATION: ClassVar[re.Pattern[str]] = re.compile(r"\[([^\[\]/]+)/([^\[\]/]+)/([^\[\]/]+)\]")
+    UNVERIFIED: ClassVar[str] = "[unverified source]"
+
     errors: list[dict[str, Any]] = field(default_factory=list)
     document_calls: int = 0
-    _documents: dict[tuple[str, str, str], dict[str, Any]] = field(default_factory=dict)
     _scores: dict[tuple[str, str, str], float] = field(default_factory=dict)
     _searched: dict[tuple[str, str], None] = field(default_factory=dict)
 
@@ -274,7 +278,6 @@ class SearchEvidence:
             return
         items = parsed if isinstance(parsed, list) else [parsed]
         seen: set[str] = set()
-        trimmer = ResultTrimmer(self.rules)
         for rank, item in enumerate(items):
             if not isinstance(item, dict):
                 continue
@@ -283,29 +286,44 @@ class SearchEvidence:
                 continue
             seen.add(item_id)
             key = (database, container, item_id)
-            previous = self._documents.get(key, {}).get("document", {})
-            self._documents[key] = {
-                "database": database,
-                "container": container,
-                "id": item_id,
-                "document": {**previous, **trimmer.trim_value(item, shorten_text=False)},
-            }
             self._scores[key] = self._scores.get(key, 0.0) + 1.0 / (60 + rank)
 
-    def documents(self, answer: str, *, limit: int) -> list[dict[str, Any]]:
-        """Prefer cited retrieved documents, then merge search positions within the cap.
+    def verify_citations(self, answer: str) -> tuple[str, list[tuple[str, str, str]]]:
+        """Return the answer with made-up citations marked, and the real ones in order.
+
+        A citation is real only if a toolkit call returned that document.
+        """
+        cited: dict[tuple[str, str, str], None] = {}
+
+        def check(match: re.Match[str]) -> str:
+            key = (match[1], match[2], match[3])
+            if key not in self._scores:
+                return self.UNVERIFIED
+            cited[key] = None
+            return match[0]
+
+        return self.CITATION.sub(check, answer), list(cited)
+
+    def documents(
+        self, cited: list[tuple[str, str, str]], *, limit: int, include_uncited: bool
+    ) -> list[dict[str, Any]]:
+        """References to the cited documents, then optionally the best-ranked uncited ones.
 
         Reciprocal rank uses positions because scores from different searches
-        are not directly comparable. Unretrieved citation IDs add no documents.
+        are not directly comparable.
         """
-        keys = sorted(
-            self._documents,
-            key=lambda key: (
-                f"[{key[0]}/{key[1]}/{key[2]}]" not in answer,
-                -self._scores[key],
-            ),
-        )
-        return [self._documents[key] for key in keys[:limit]]
+        used = set(cited)
+        keys = list(cited)
+        if include_uncited:
+            keys += sorted(
+                (key for key in self._scores if key not in used),
+                key=lambda key: -self._scores[key],
+            )
+        return [
+            {"database": database, "container": container, "id": item_id,
+             "used_in_answer": (database, container, item_id) in used}
+            for database, container, item_id in keys[:limit]
+        ]
 
 
 class ToolkitToolAdapter:

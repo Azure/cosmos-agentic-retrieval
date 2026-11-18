@@ -7,7 +7,8 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, Generic, TypeVar
+import re
+from typing import Any, ClassVar, Generic, TypeVar
 
 from openai import OpenAI
 
@@ -20,16 +21,22 @@ QuestionT = TypeVar("QuestionT", bound=Question)
 class AgentResponse:
     """The agent's answer and the Cosmos DB item IDs of the documents it returned for one question."""
 
+    # The service's [database/container/id] citations and its marker for made-up ones.
+    CITATION: ClassVar[re.Pattern[str]] = re.compile(
+        r"\s*\[(?:[^\[\]/]+/[^\[\]/]+/[^\[\]/]+|unverified source)\]"
+    )
+
+    # Citations are removed so the judge scores only the answer.
     answer: str
-    # Returned documents hold only the fields the agent's searches selected, so
-    # evaluators look these IDs up in the collection's data instead.
+    # Returned documents are references without text, so evaluators look these
+    # IDs up in the collection's data instead.
     document_ids: list[str]
 
     @classmethod
     def from_response_body(cls, body: dict[str, Any]) -> AgentResponse:
         """Read the answer and document IDs from an /agentic_search response body."""
         return cls(
-            answer=body.get("answer") or "",
+            answer=cls.CITATION.sub("", body.get("answer") or ""),
             document_ids=[d["id"] for d in body.get("documents", [])],
         )
 
