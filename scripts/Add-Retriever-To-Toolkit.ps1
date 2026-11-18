@@ -6,8 +6,7 @@
 .DESCRIPTION
     Adds the agentic retrieval service to an existing Azure Cosmos DB MCP Toolkit
     Container App, as a second container named "retriever". The toolkit's
-    agentic_search tool sends its requests to this container. The toolkit's own
-    container is not changed.
+    agentic_search tool sends its requests to this container.
 
     The script:
     1. Builds the service's Docker image with the configuration file
@@ -22,6 +21,9 @@
        whoever deployed it an owner.
     4. Adds the "retriever" container to the app, or updates it if it exists,
        and passes it the toolkit's Entra app ID (TOOLKIT_APP_ID).
+    5. Turns on the toolkit's agentic_search tool: if the toolkit container
+       does not set ENABLE_AGENTIC_SEARCH, sets it to true. If it is set to
+       anything other than true, the script stops before changing anything.
 
     The service authenticates with the chat model and the toolkit with the
     app's managed identity, so the configuration file must not contain a key
@@ -88,6 +90,14 @@ $toolkitContainer = $app.properties.template.containers | Where-Object { $_.name
 $toolkitAppId = ($toolkitContainer.env | Where-Object { $_.name -eq "AzureAd__ClientId" }).value
 if (-not $toolkitAppId) { throw "The toolkit container has no AzureAd__ClientId setting. Was the toolkit deployed with Entra sign-in?" }
 
+# The toolkit lists agentic_search only when ENABLE_AGENTIC_SEARCH is exactly "true".
+# If it is not set, the script sets it below; if it is set to anything else, stop.
+$enableSetting = ($toolkitContainer.env | Where-Object { $_.name -eq "ENABLE_AGENTIC_SEARCH" }).value
+$searchEnabled = $enableSetting -ceq "true"
+if (-not $searchEnabled -and $null -ne $enableSetting) {
+    throw "The toolkit container sets ENABLE_AGENTIC_SEARCH to '$enableSetting', which turns agentic_search off. Set it to true, or remove it, then run the script again."
+}
+
 # Name the images: the pushed image goes to the app's own registry
 $registry = $app.properties.configuration.registries[0].server
 $image = "$registry/cosmos-agentic-retriever:$ImageTag"
@@ -151,6 +161,13 @@ az containerapp update --name $ContainerAppName --resource-group $ResourceGroup 
     --container-name retriever --image $image --cpu 0.25 --memory 0.5Gi `
     --set-env-vars "TOOLKIT_APP_ID=$toolkitAppId" --output none
 if ($LASTEXITCODE -ne 0) { throw "Adding the retriever container failed" }
+
+# Turn on the toolkit's agentic_search tool, unless it is already on
+if (-not $searchEnabled) {
+    az containerapp update --name $ContainerAppName --resource-group $ResourceGroup `
+        --container-name $ContainerAppName --set-env-vars "ENABLE_AGENTIC_SEARCH=true" --output none
+    if ($LASTEXITCODE -ne 0) { throw "Turning on agentic_search in the toolkit failed" }
+}
 
 Write-Host "Retriever added to '$ContainerAppName'. New roles can take a few minutes to take effect. To see the retriever's logs:"
 Write-Host "  az containerapp logs show --name $ContainerAppName --resource-group $ResourceGroup --container retriever --tail 50"
