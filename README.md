@@ -87,10 +87,11 @@ To find these values:
 
 The script builds the service image with the configuration inside, pushes it to
 the existing toolkit's registry, lets the app's managed identity call the model
-and the toolkit's MCP tools, and adds the service as a second container in the
-app. You will need to run it as an owner of the toolkit's Entra app; whoever
-deployed the toolkit is an owner. On networks that block PyPI, add
-`-PipIndexUrl <mirror>` to install packages from a mirror.
+and the toolkit's MCP tools, adds the service as a second container in the app,
+and turns on the toolkit's `agentic_search` tool if it is off. You will need to
+run it as an owner of the toolkit's Entra app; whoever deployed the toolkit is
+an owner. On networks that block PyPI, add `-PipIndexUrl <mirror>` to install
+packages from a mirror.
 
 ### Step 4: Try it
 
