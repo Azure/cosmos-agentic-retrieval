@@ -9,6 +9,9 @@ llm_max_retries: 6
 agent_max_turns: 10
 # Most documents returned per question (up to 50); a request's maxDocuments can only lower it.
 agent_max_documents: 20
+# Documents returned: "cited" (only those the answer cites), or "cited_and_ranked"
+# (cited and then the best-ranked retrieved documents the answer didn't cite).
+returned_documents: cited
 
 # The deploy script sets TOOLKIT_APP_ID; local runs must supply it explicitly.
 toolkit_mcp_url: http://127.0.0.1:8080/mcp

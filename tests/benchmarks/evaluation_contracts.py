@@ -7,7 +7,8 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, Generic, TypeVar
+import re
+from typing import Any, ClassVar, Generic, TypeVar
 
 from openai import OpenAI
 
@@ -20,17 +21,30 @@ QuestionT = TypeVar("QuestionT", bound=Question)
 class AgentResponse:
     """The agent's answer and the Cosmos DB item IDs of the documents it returned for one question."""
 
+    # The service's [database/container/id] citations and its marker for made-up ones.
+    CITATION: ClassVar[re.Pattern[str]] = re.compile(
+        r"\s*\[(?:[^\[\]/]+/[^\[\]/]+/[^\[\]/]+|unverified source)\]"
+    )
+
+    # Citations are removed so the judge scores only the answer.
     answer: str
-    # Returned documents hold only the fields the agent's searches selected, so
-    # evaluators look these IDs up in the collection's data instead.
+    # Returned documents are references without text, so evaluators look these
+    # IDs up in the collection's data instead.
     document_ids: list[str]
+    # The returned documents the answer cites; None for responses that don't mark them.
+    cited_document_ids: list[str] | None = None
 
     @classmethod
     def from_response_body(cls, body: dict[str, Any]) -> AgentResponse:
         """Read the answer and document IDs from an /agentic_search response body."""
+        documents = body.get("documents", [])
+        marked = not documents or "used_in_answer" in documents[0]
         return cls(
-            answer=body.get("answer") or "",
-            document_ids=[d["id"] for d in body.get("documents", [])],
+            answer=cls.CITATION.sub("", body.get("answer") or ""),
+            document_ids=[d["id"] for d in documents],
+            cited_document_ids=(
+                [d["id"] for d in documents if d["used_in_answer"]] if marked else None
+            ),
         )
 
 

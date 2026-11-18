@@ -6,8 +6,8 @@ search model spends tokens and leaves less room for useful evidence. This module
 adapts those results without changing the toolkit or duplicating its search logic.
 
 ToolkitToolAdapter uses short previews for searches; the agent can request full
-text with returnDocuments or read by ID. SearchEvidence applies the same cleanup
-without shortening text, so the caller can still receive full supporting text.
+text with returnDocuments or read by ID. The caller receives references to the
+cited documents, not their text, so nothing here is returned to the caller.
 Vector markers preserve field names for later vector searches. These are output
 formatting rules, not access controls; the toolkit still returns the original data.
 """
@@ -36,10 +36,9 @@ class TrimRules:
 
 
 class ResultTrimmer:
-    """Apply one policy consistently to search previews, full reads and evidence.
+    """Apply one policy consistently to search previews and full reads.
 
-    Results are copied, not edited in place, so shortening what the model sees
-    cannot accidentally shorten the evidence kept for the caller.
+    Results are copied, not edited in place, so the toolkit's reply is unchanged.
     """
 
     def __init__(self, rules: TrimRules) -> None:
@@ -48,7 +47,7 @@ class ResultTrimmer:
     def trim_value(self, value: Any, *, shorten_text: bool) -> Any:
         """Clean nested fields without requiring a container-specific field map.
 
-        shorten_text=False retains full text for reads and evidence; configured
+        shorten_text=False retains full text for reads; configured
         field removal and vector replacement still apply.
         """
         if isinstance(value, dict):

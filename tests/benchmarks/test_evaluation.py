@@ -19,24 +19,37 @@ from evaluator_hipporag2 import HippoRAGEvaluator
 @pytest.mark.parametrize(
     "body, expected",
     [
-        ({}, AgentResponse("", [])),
+        ({}, AgentResponse("", [], [])),
         (
             {
-                "answer": "An answer",
+                "answer": "Old format",
+                "documents": [{"database": "db", "container": "corpus", "id": "p1", "document": {}}],
+            },
+            AgentResponse("Old format", ["p1"], None),
+        ),
+        (
+            {
+                "answer": "An answer [db/corpus/passage-1], not [unverified source].",
                 "documents": [
                     {
                         "database": "db",
                         "container": "corpus",
                         "id": "passage-1",
-                        "document": {"text": "Evidence without title or parent ID"},
-                    }
+                        "used_in_answer": True,
+                    },
+                    {
+                        "database": "db",
+                        "container": "corpus",
+                        "id": "passage-2",
+                        "used_in_answer": False,
+                    },
                 ],
             },
-            AgentResponse("An answer", ["passage-1"]),
+            AgentResponse("An answer, not.", ["passage-1", "passage-2"], ["passage-1"]),
         ),
     ],
 )
-def test_response_reads_item_ids_without_requiring_selected_fields(body, expected):
+def test_response_reads_item_ids_and_removes_citations_before_judging(body, expected):
     assert AgentResponse.from_response_body(body) == expected
 
 
