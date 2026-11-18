@@ -19,7 +19,14 @@ from evaluator_hipporag2 import HippoRAGEvaluator
 @pytest.mark.parametrize(
     "body, expected",
     [
-        ({}, AgentResponse("", [])),
+        ({}, AgentResponse("", [], [])),
+        (
+            {
+                "answer": "Old format",
+                "documents": [{"database": "db", "container": "corpus", "id": "p1", "document": {}}],
+            },
+            AgentResponse("Old format", ["p1"], None),
+        ),
         (
             {
                 "answer": "An answer [db/corpus/passage-1], not [unverified source].",
@@ -29,10 +36,16 @@ from evaluator_hipporag2 import HippoRAGEvaluator
                         "container": "corpus",
                         "id": "passage-1",
                         "used_in_answer": True,
-                    }
+                    },
+                    {
+                        "database": "db",
+                        "container": "corpus",
+                        "id": "passage-2",
+                        "used_in_answer": False,
+                    },
                 ],
             },
-            AgentResponse("An answer, not.", ["passage-1"]),
+            AgentResponse("An answer, not.", ["passage-1", "passage-2"], ["passage-1"]),
         ),
     ],
 )

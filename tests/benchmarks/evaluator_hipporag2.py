@@ -75,12 +75,19 @@ class HippoRAGEvaluator(Evaluator[HippoRAGQuestion]):
         else:
             judge_score, judge_tokens = 0.0, {"prompt_tokens": 0, "completion_tokens": 0}
         titles = [self.titles_by_id[i] for i in response.document_ids if i in self.titles_by_id]
+        cited_recall = None
+        if response.cited_document_ids is not None:
+            cited_titles = [
+                self.titles_by_id[i] for i in response.cited_document_ids if i in self.titles_by_id
+            ]
+            cited_recall = compute_gold_title_recall(cited_titles, question.gold_titles)
         return EvaluationResult(
             scores={
                 "exact_match": compute_exact_match(answer, question.answers),
                 "f1": compute_f1(answer, question.answers),
                 "judge": judge_score,
                 "gold_title_recall": compute_gold_title_recall(titles, question.gold_titles),
+                "cited_gold_title_recall": cited_recall,
             },
             judge_tokens=judge_tokens,
         )

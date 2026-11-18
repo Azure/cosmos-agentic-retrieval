@@ -31,13 +31,20 @@ class AgentResponse:
     # Returned documents are references without text, so evaluators look these
     # IDs up in the collection's data instead.
     document_ids: list[str]
+    # The returned documents the answer cites; None for responses that don't mark them.
+    cited_document_ids: list[str] | None = None
 
     @classmethod
     def from_response_body(cls, body: dict[str, Any]) -> AgentResponse:
         """Read the answer and document IDs from an /agentic_search response body."""
+        documents = body.get("documents", [])
+        marked = not documents or "used_in_answer" in documents[0]
         return cls(
             answer=cls.CITATION.sub("", body.get("answer") or ""),
-            document_ids=[d["id"] for d in body.get("documents", [])],
+            document_ids=[d["id"] for d in documents],
+            cited_document_ids=(
+                [d["id"] for d in documents if d["used_in_answer"]] if marked else None
+            ),
         )
 
 
