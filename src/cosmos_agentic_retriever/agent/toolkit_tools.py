@@ -230,19 +230,22 @@ class SearchScope:
 class SearchEvidence:
     """Track which documents the toolkit actually returned for one question.
 
-    The answer's citations are checked against these, so the caller only gets
-    references to documents that were retrieved. Sources are identified by
-    database/container/id, and failures stay visible to the caller. Schema and
-    listing results are not supporting documents.
+    Each retrieved document gets a short label, such as D3, the first time a
+    result contains it. The agent cites documents by label, because copying long
+    ids is error-prone, and the caller gets the same label with each reference.
+    The answer's citations are checked against these labels, so the caller only
+    gets references to documents that were retrieved. Failures stay visible to
+    the caller. Schema and listing results are not supporting documents.
     """
 
-    # Cosmos DB names and ids cannot contain "/", so [database/container/id] parses unambiguously.
-    CITATION: ClassVar[re.Pattern[str]] = re.compile(r"\[([^\[\]/]+)/([^\[\]/]+)/([^\[\]/]+)\]")
+    CITE_AS: ClassVar[str] = "cite_as"
+    CITATION: ClassVar[re.Pattern[str]] = re.compile(r"\[(D\d+)\]")
     UNVERIFIED: ClassVar[str] = "[unverified source]"
 
     errors: list[dict[str, Any]] = field(default_factory=list)
     document_calls: int = 0
     _scores: dict[tuple[str, str, str], float] = field(default_factory=dict)
+    _labels: dict[tuple[str, str, str], str] = field(default_factory=dict)
     _searched: dict[tuple[str, str], None] = field(default_factory=dict)
 
     @property
@@ -287,17 +290,39 @@ class SearchEvidence:
             seen.add(item_id)
             key = (database, container, item_id)
             self._scores[key] = self._scores.get(key, 0.0) + 1.0 / (60 + rank)
+            self._labels.setdefault(key, f"D{len(self._labels) + 1}")
+
+    def label_results(self, arguments: dict[str, Any], content: str) -> str:
+        """Put each returned document's label first, so the agent can cite it."""
+        database, container = arguments.get("databaseId"), arguments.get("containerId")
+        try:
+            parsed = json.loads(content)
+        except json.JSONDecodeError:
+            return content
+
+        def label(item: Any) -> Any:
+            item_id = item.get("id") if isinstance(item, dict) else None
+            key = (database, container, item_id) if isinstance(item_id, str) else None
+            if key not in self._labels:
+                return item
+            # Ours replaces a document field of the same name, so the agent sees one label.
+            fields = {name: value for name, value in item.items() if name != self.CITE_AS}
+            return {self.CITE_AS: self._labels[key], **fields}
+
+        labelled = [label(item) for item in parsed] if isinstance(parsed, list) else label(parsed)
+        return json.dumps(labelled, ensure_ascii=False, separators=(",", ":"))
 
     def verify_citations(self, answer: str) -> tuple[str, list[tuple[str, str, str]]]:
         """Return the answer with made-up citations marked, and the real ones in order.
 
-        A citation is real only if a toolkit call returned that document.
+        A citation is real only if a toolkit call returned the labelled document.
         """
+        keys = {label: key for key, label in self._labels.items()}
         cited: dict[tuple[str, str, str], None] = {}
 
         def check(match: re.Match[str]) -> str:
-            key = (match[1], match[2], match[3])
-            if key not in self._scores:
+            key = keys.get(match[1])
+            if key is None:
                 return self.UNVERIFIED
             cited[key] = None
             return match[0]
@@ -320,9 +345,9 @@ class SearchEvidence:
                 key=lambda key: -self._scores[key],
             )
         return [
-            {"database": database, "container": container, "id": item_id,
-             "used_in_answer": (database, container, item_id) in used}
-            for database, container, item_id in keys[:limit]
+            {self.CITE_AS: self._labels[key], "database": key[0], "container": key[1],
+             "id": key[2], "used_in_answer": key in used}
+            for key in keys[:limit]
         ]
 
 
@@ -379,12 +404,12 @@ class ToolkitToolAdapter:
             self._evidence.record(self._spec.name, forwarded, result)
         if result.error is not None:
             return result
-        return replace(
-            result,
-            content=self._trimmer.trim_json_text(
-                result.content, shorten_text=self._spec.search and not full_text
-            ),
+        content = self._trimmer.trim_json_text(
+            result.content, shorten_text=self._spec.search and not full_text
         )
+        if self._evidence is not None:
+            content = self._evidence.label_results(forwarded, content)
+        return replace(result, content=content)
 
     @staticmethod
     def _toolkit_error(text: str) -> str | None:
