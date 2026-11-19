@@ -34,7 +34,9 @@ ERB documents are long, so each is stored as chunks of up to 512 tokens with
 `CHUNK_OVERLAP_TOKENS`); the whole corpus is about 1.73M chunks. Each chunk
 keeps its document's ERB `doc_id`. The items don't record the chunk settings,
 so name the container after them, e.g. `--collection enterprise-rag-bench
---container enterprise-rag-bench-c512-o128`.
+--container enterprise-rag-bench-c512-o128`. Loading it into a serverless
+account took about 18 hours with 4 to 8 workers, as Cosmos DB throttles the
+writes; a rerun loads only what is missing.
 
 ## Run
 
@@ -72,7 +74,10 @@ python tests/benchmarks/run.py --toolkit-url https://<toolkit-app>/mcp \
     --collection hipporag2 --container hipporag2-full --questions-per-dataset 100 --workers 8
 ```
 
-Without `--questions-per-dataset`, all 5,000 questions run.
+Without `--questions-per-dataset`, all 5,000 questions run. For ERB, pass
+`--collection enterprise-rag-bench --container enterprise-rag-bench-c512-o128`;
+`--questions-per-dataset` then picks that many questions from each of its 10
+categories, and without it all 500 run.
 
 Each run writes one JSON file under `.live-data/benchmark-runs/` with its
 settings, a per-dataset summary (latency, turns, tool calls and agent token
@@ -109,8 +114,10 @@ and reports each score per category too:
   documents.
 - **returned_invalid_extra_documents**: number of returned documents that are
   not gold.
+- **cited_document_recall**: share of the question's gold documents among the
+  documents the answer cites, as ERB intends. Not scored for responses that
+  don't mark cited documents.
 
 The scores come from our own evaluator and judge model, without ERB's step
-that corrects gold documents and answers, and use every returned document
-rather than the ones the answer cites. They are not comparable with the ERB
+that corrects gold documents and answers. They are not comparable with the ERB
 leaderboard.
