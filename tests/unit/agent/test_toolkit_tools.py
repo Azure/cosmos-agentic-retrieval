@@ -166,12 +166,25 @@ async def test_evidence_returns_references_without_document_text():
     )
 
     assert "more characters" in result.content
-    answer, cited = evidence.verify_citations("It says a [db/c/d1].")
-    assert answer == "It says a [db/c/d1]."
+    assert list(json.loads(result.content)[0]) == ["cite_as", "id", "text", "embedding"]
+    answer, cited = evidence.verify_citations("It says a [D1].")
+    assert answer == "It says a [D1]."
     assert evidence.documents(cited, limit=10, include_uncited=False) == [
-        {"database": "db", "container": "c", "id": "d1", "used_in_answer": True},
+        {"cite_as": "D1", "database": "db", "container": "c", "id": "d1", "used_in_answer": True},
     ]
     assert evidence.searched == [{"database": "db", "container": "c"}]
+
+
+async def test_labels_reach_the_agent_and_stay_the_same_across_calls():
+    evidence = SearchEvidence()
+    search = _FakeToolkit(ToolExecutionResult(content=json.dumps([{"id": "a"}, {"id": "b", "cite_as": "theirs"}])))
+    read = _FakeToolkit(ToolExecutionResult(content=json.dumps({"id": "b", "text": "full"})))
+
+    searched = await _tools(search, evidence=evidence)["text_search"](databaseId="db", containerId="c")
+    reread = await _tools(read, evidence=evidence)["find_document_by_id"](databaseId="db", containerId="c", id="b")
+
+    assert json.loads(searched.content) == [{"cite_as": "D1", "id": "a"}, {"cite_as": "D2", "id": "b"}]
+    assert json.loads(reread.content) == {"cite_as": "D2", "id": "b", "text": "full"}
 
 
 def test_citations_keep_answer_order_and_mark_made_up_ones():
@@ -180,12 +193,10 @@ def test_citations_keep_answer_order_and_mark_made_up_ones():
                     ToolExecutionResult(content='[{"id":"a"},{"id":"b"}]'))
 
     answer, cited = evidence.verify_citations(
-        "B [db/c/b]. A [db/c/a], again [db/c/b]. C [db/c/made-up] and [db/other/a]."
+        "B [D2]. A [D1], again [D2]. C [D9] and [db/c/a]."
     )
 
-    assert answer == (
-        "B [db/c/b]. A [db/c/a], again [db/c/b]. C [unverified source] and [unverified source]."
-    )
+    assert answer == "B [D2]. A [D1], again [D2]. C [unverified source] and [db/c/a]."
     assert cited == [("db", "c", "b"), ("db", "c", "a")]
     assert [item["id"] for item in evidence.documents(cited, limit=1, include_uncited=False)] == ["b"]
 
@@ -204,9 +215,9 @@ def test_evidence_deduplicates_by_source_merges_ranks_and_puts_citations_first()
 
     ranked = evidence.documents([], limit=2, include_uncited=True)
     assert [item["id"] for item in ranked] == ["repeated", "first"]
-    _, cited = evidence.verify_citations("x [db/c/cited]")
+    _, cited = evidence.verify_citations("x [D3]")
     assert evidence.documents(cited, limit=10, include_uncited=False) == [
-        {"database": "db", "container": "c", "id": "cited", "used_in_answer": True},
+        {"cite_as": "D3", "database": "db", "container": "c", "id": "cited", "used_in_answer": True},
     ]
     documents = evidence.documents(cited, limit=10, include_uncited=True)
     assert [item["used_in_answer"] for item in documents] == [True, False, False, False]
@@ -221,7 +232,7 @@ async def test_evidence_records_toolkit_errors_and_does_not_invent_documents():
 
     assert evidence.document_calls == 1
     assert evidence.searched == []
-    assert evidence.verify_citations("x [db/c/nonexistent]") == ("x [unverified source]", [])
+    assert evidence.verify_citations("x [D1]") == ("x [unverified source]", [])
     assert evidence.documents([], limit=5, include_uncited=True) == []
     assert evidence.errors == [{
         "tool": "text_search", "database": "db", "container": "c",

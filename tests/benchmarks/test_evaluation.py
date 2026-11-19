@@ -29,15 +29,17 @@ from evaluator_hipporag2 import HippoRAGEvaluator
         ),
         (
             {
-                "answer": "An answer [db/corpus/passage-1], not [unverified source].",
+                "answer": "An answer [D1], not [unverified source].",
                 "documents": [
                     {
+                        "cite_as": "D1",
                         "database": "db",
                         "container": "corpus",
                         "id": "passage-1",
                         "used_in_answer": True,
                     },
                     {
+                        "cite_as": "D2",
                         "database": "db",
                         "container": "corpus",
                         "id": "passage-2",
@@ -46,6 +48,15 @@ from evaluator_hipporag2 import HippoRAGEvaluator
                 ],
             },
             AgentResponse("An answer, not.", ["passage-1", "passage-2"], ["passage-1"]),
+        ),
+        (
+            {
+                "answer": "An older answer [db/corpus/passage-1].",
+                "documents": [
+                    {"database": "db", "container": "corpus", "id": "passage-1", "used_in_answer": True},
+                ],
+            },
+            AgentResponse("An older answer.", ["passage-1"], ["passage-1"]),
         ),
     ],
 )
