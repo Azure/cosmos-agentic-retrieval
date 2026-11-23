@@ -40,9 +40,9 @@ From another terminal, ask a question about one database:
 Add "container":"articles" to the JSON body to search only articles; omit
 "database" to let the agent discover where to search. The response contains a
 short answer, an explanation of how the agent arrived at it, both citing
-documents as [database/container/id], and references to the cited documents
-(database, container and id, no text). A citation to a document
-the agent never retrieved becomes [unverified source]. This example sets
+documents by label, e.g. [D3], and references to the cited documents
+(cite_as label, database, container and id; no text). A citation to a label
+the agent was never given becomes [unverified source]. This example sets
 maxDocuments to 5; the service's agent_max_documents setting also caps that
 number (default 20). If a tool call fails, the response includes that error.
 See the README to run the service and connect the MCP toolkit.

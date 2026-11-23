@@ -73,7 +73,7 @@ def test_agent_search_answers_with_supporting_documents(agent_http, live_databas
     assert isinstance(body["answer"], str) and body["answer"].strip()
     assert body["documents"], "the agent should return supporting documents"
     assert all(
-        set(item) == {"database", "container", "id", "used_in_answer"}
+        set(item) == {"cite_as", "database", "container", "id", "used_in_answer"}
         for item in body["documents"]
     )
 

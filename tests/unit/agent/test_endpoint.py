@@ -136,7 +136,7 @@ def _answer(text="the answer") -> LlmTurn:
 def test_agent_search_returns_verified_citations_and_references(http):
     client, toolkit = http
     chat = _FakeChat([_call(), _answer(
-        "Answer: It is a [D/C/d1].\nExplanation: A says so [D/C/d1], and b [D/C/made-up]."
+        "Answer: It is a [D1].\nExplanation: A says so [D1], and b [D7]."
     )])
     client.app.state.chat_client = chat
 
@@ -144,8 +144,8 @@ def test_agent_search_returns_verified_citations_and_references(http):
 
     assert response.status_code == 200, response.text
     body = response.json()
-    assert body["answer"] == "It is a [D/C/d1]."
-    assert body["explanation"] == "A says so [D/C/d1], and b [unverified source]."
+    assert body["answer"] == "It is a [D1]."
+    assert body["explanation"] == "A says so [D1], and b [unverified source]."
     assert body["terminal_reason"] == "stop" and body["turns"] == 2
     assert body["tool_calls"] == {"text_search": 1} and body["model"] == "fake-model"
     assert body["usage"] == {
@@ -155,9 +155,10 @@ def test_agent_search_returns_verified_citations_and_references(http):
     assert body["searched"] == [{"database": "D", "container": "C"}]
     assert body["errors"] == [] and body["partial"] is False
     assert body["documents"] == [
-        {"database": "D", "container": "C", "id": "d1", "used_in_answer": True},
+        {"cite_as": "D1", "database": "D", "container": "C", "id": "d1", "used_in_answer": True},
     ]
     assert "more characters" in chat.messages_seen[-1][-1]["content"]
+    assert '"cite_as":"D1"' in chat.messages_seen[-1][-1]["content"]
     assert toolkit.calls[0][0] == "text_search"
 
 
@@ -179,7 +180,7 @@ def test_scope_selects_discovery_tools_and_prompt(http, scope, listing):
     prompt = chat.messages_seen[0][0]["content"]
     assert "get_approximate_schema" in prompt and "selectProperties must include id" in prompt
     assert "read them in full" in prompt and "Explanation:" in prompt
-    assert "[database/container/id]" in prompt
+    assert "cite_as" in prompt and "[D3]" in prompt
 
 
 def test_agent_can_discover_then_search_without_scope(http):
@@ -191,7 +192,7 @@ def test_agent_can_discover_then_search_without_scope(http):
         _call(arguments={
             "databaseId": "OTHER", "containerId": "other", "property": "text", "searchPhrase": "hi",
         }, call_id="c4"),
-        _answer("It is a [OTHER/other/d1]."),
+        _answer("It is a [D1]."),
     ])
 
     response = client.post("/agentic_search", json={"query": "find something"})
@@ -227,13 +228,15 @@ def test_cited_and_ranked_puts_citations_first_within_the_limit(http, limit, ser
     settings = _settings(agent_max_documents=service_cap, returned_documents="cited_and_ranked")
     with TestClient(_app(settings)) as scoped:
         scoped.app.state.toolkit = client.app.state.toolkit
-        scoped.app.state.chat_client = _FakeChat([_call(), _answer("It is [D/C/d9].")])
+        scoped.app.state.chat_client = _FakeChat([_call(), _answer("It is [D10].")])
         response = scoped.post("/agentic_search", json={"query": "question", "maxDocuments": limit})
 
     assert response.status_code == 200
     documents = response.json()["documents"]
     assert len(documents) == min(limit, service_cap)
-    assert documents[0] == {"database": "D", "container": "C", "id": "d9", "used_in_answer": True}
+    assert documents[0] == {
+        "cite_as": "D10", "database": "D", "container": "C", "id": "d9", "used_in_answer": True,
+    }
     assert not any(item["used_in_answer"] for item in documents[1:])
 
 
@@ -241,7 +244,7 @@ def test_cited_mode_returns_only_cited_documents(http):
     client, toolkit = http
     toolkit.results["hi"] = [{"id": f"d{index}", "text": str(index)} for index in range(10)]
     client.app.state.chat_client = _FakeChat([_call(), _answer(
-        "Answer: It is [D/C/d9].\nExplanation: [D/C/d2] led to [D/C/d9]."
+        "Answer: It is [D10].\nExplanation: [D3] led to [D10]."
     )])
 
     response = client.post("/agentic_search", json={"query": "question"})
@@ -304,7 +307,7 @@ def test_model_failure_keeps_evidence_but_not_unfinished_answer(http):
     assert response.json()["error_kind"] == "unavailable"
     assert response.json()["answer"] == ""
     assert response.json()["documents"] == [
-        {"database": "D", "container": "C", "id": "d1", "used_in_answer": False},
+        {"cite_as": "D1", "database": "D", "container": "C", "id": "d1", "used_in_answer": False},
     ]
     assert "private-" not in response.text
 
@@ -319,7 +322,7 @@ def test_simultaneous_questions_keep_evidence_separate(http):
         async def complete(self, messages, tools):
             question = messages[1]["content"]
             if messages[-1]["role"] == "tool":
-                return _answer(f"It is [D/C/{question}].")
+                return _answer("It is [D1].")
             return _call(arguments={
                 "databaseId": "D", "containerId": "C", "property": "text", "searchPhrase": question,
             })

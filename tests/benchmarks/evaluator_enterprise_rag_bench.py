@@ -3,8 +3,8 @@
 Follows ERB's metrics-based evaluation (src/scripts/answer_evaluation/
 metrics_based_eval.py) without its gold-correction step, like its
 --no-correction mode, and with our own judge model. Scores are therefore not
-comparable with the ERB leaderboard. Documents are the ones the response
-returned, not the ones its answer cites.
+comparable with the ERB leaderboard. Document recall is scored over the documents
+the response returned and, as ERB intends, over the ones its answer cites.
 
 The two judge prompts are copied from ERB's src/prompts/answer_evaluation.py at
 commit d36685e. The fact prompt also shows the question, with an instruction to
@@ -115,7 +115,10 @@ class ERBEvaluator(Evaluator[ERBQuestion]):
     name = "enterprise-rag-bench"
 
     def evaluate(self, question: ERBQuestion, response: AgentResponse) -> EvaluationResult:
-        returned_doc_ids = self.read_returned_doc_ids(response)
+        returned_doc_ids = self.read_doc_ids(response.document_ids)
+        cited_doc_ids = (
+            None if response.cited_document_ids is None else self.read_doc_ids(response.cited_document_ids)
+        )
         expected = set(question.expected_doc_ids)
         judge_tokens = {"prompt_tokens": 0, "completion_tokens": 0}
         details = {}
@@ -140,14 +143,20 @@ class ERBEvaluator(Evaluator[ERBQuestion]):
                 "returned_invalid_extra_documents": (
                     float(len(returned_doc_ids - expected)) if expected else None
                 ),
+                # Not scored for responses that don't mark which documents the answer cites.
+                "cited_document_recall": (
+                    len(cited_doc_ids & expected) / len(expected)
+                    if expected and cited_doc_ids is not None
+                    else None
+                ),
             },
             judge_tokens=judge_tokens,
             details=details,
         )
 
-    def read_returned_doc_ids(self, response: AgentResponse) -> set[str]:
-        """ERB document IDs of the returned chunks; several chunks of one document count once."""
-        return {ERBDocument.read_doc_id(passage_id) for passage_id in response.document_ids}
+    def read_doc_ids(self, passage_ids: list[str]) -> set[str]:
+        """ERB document IDs of the given chunks; several chunks of one document count once."""
+        return {ERBDocument.read_doc_id(passage_id) for passage_id in passage_ids}
 
     def judge_correctness(
         self, question: ERBQuestion, answer: str, judge_tokens: dict[str, int | None]

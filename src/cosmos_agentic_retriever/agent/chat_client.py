@@ -62,12 +62,10 @@ class ChatClient:
         SDK retries repeat only this request with the same transcript. If they
         are exhausted, return a safe error for the loop and HTTP handler.
         """
-        request: dict[str, Any] = {
-            **self._params,
-            "model": self.model,
-            "messages": messages,
-            "tools": self._to_openai_tools(tools),
-        }
+        request: dict[str, Any] = {**self._params, "model": self.model, "messages": messages}
+        # The API rejects an empty tool list, so a tool-free request omits it.
+        if tools:
+            request["tools"] = self._to_openai_tools(tools)
         try:
             response = await self._client.chat.completions.create(**request)  # type: ignore[call-overload]
             return self._parse_response(response)

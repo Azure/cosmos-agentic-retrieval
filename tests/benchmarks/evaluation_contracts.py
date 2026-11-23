@@ -21,9 +21,10 @@ QuestionT = TypeVar("QuestionT", bound=Question)
 class AgentResponse:
     """The agent's answer and the Cosmos DB item IDs of the documents it returned for one question."""
 
-    # The service's [database/container/id] citations and its marker for made-up ones.
+    # The service's [D3] label citations, the [database/container/id] ones in older
+    # saved runs, and its marker for made-up ones.
     CITATION: ClassVar[re.Pattern[str]] = re.compile(
-        r"\s*\[(?:[^\[\]/]+/[^\[\]/]+/[^\[\]/]+|unverified source)\]"
+        r"\s*\[(?:D\d+|[^\[\]/]+/[^\[\]/]+/[^\[\]/]+|unverified source)\]"
     )
 
     # Citations are removed so the judge scores only the answer.

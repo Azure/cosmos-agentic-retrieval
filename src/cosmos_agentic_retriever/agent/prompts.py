@@ -52,11 +52,11 @@ def build_system_prompt(scope: SearchScope) -> str:
 
         "Reply in plain text, in two parts. First \"Answer:\" followed by a short, "
         "direct answer. Then \"Explanation:\" describing step by step how you "
-        "arrived at it. Cite the document behind each claim right after the claim "
-        "as [database/container/id], using the exact database, container and "
-        "document id. Cite every document you relied on, including those that "
-        "led you to other documents. For example:\n\n"
-        "Answer: Paris [films/people/p9]\n"
-        "Explanation: Film X was directed by Jane Doe [films/movies/m17]. "
-        "Jane Doe was born in Paris [films/people/p9]."
+        "arrived at it. Each document in a tool result has a cite_as label, such "
+        "as D3. Cite the document behind each claim right after the claim as its "
+        "label in brackets, e.g. [D3]. Cite every document you relied on, "
+        "including those that led you to other documents. For example:\n\n"
+        "Answer: Paris [D2]\n"
+        "Explanation: Film X was directed by Jane Doe [D1]. "
+        "Jane Doe was born in Paris [D2]."
     )
