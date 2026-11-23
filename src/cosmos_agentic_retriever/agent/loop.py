@@ -28,6 +28,12 @@ from cosmos_agentic_retriever.agent.tool_contracts import (
 
 _logger = structlog.get_logger(__name__)
 
+FINAL_TURN_INSTRUCTION = (
+    "You have reached the search limit. Answer now from the documents you have "
+    "found, in the format asked for. If they do not answer the question, say so "
+    "and give what they do show."
+)
+
 
 @dataclass(frozen=True)
 class TokenUsage:
@@ -116,6 +122,8 @@ async def run_agent_search(
         tools: the capabilities offered to the model. Names must be unique.
         system_prompt: the instruction that opens the transcript.
         max_turns: the hard cap on model calls; the loop always stops by here.
+            The last call offers no tools and asks for an answer from what was found,
+            so a capped run still answers; it ends with ``"max_turns"``.
 
     Returns:
         An `AgentResult` with the final answer, why the loop ended, the number of
@@ -148,12 +156,17 @@ async def run_agent_search(
     tool_responses: list[ToolCallResponse] = []
     error: ModelError | None = None
     for turn in range(1, max_turns + 1):
-        reply = await complete(messages, tools)
+        final = turn == max_turns and max_turns > 1
+        if final:
+            messages.append({"role": "user", "content": FINAL_TURN_INSTRUCTION})
+        reply = await complete(messages, [] if final else tools)
         messages.append(reply.message)
         usage += reply.usage
         if reply.error is not None:
             terminal_reason = "error"
             error = reply.error
+            break
+        if final:
             break
         if not reply.tool_calls:
             terminal_reason = "stop"
