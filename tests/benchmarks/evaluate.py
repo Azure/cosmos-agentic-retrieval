@@ -191,6 +191,8 @@ def main() -> None:
             base_url=os.environ["LLM_BASE_URL"],
             api_key=os.environ.get("LLM_API_KEY")
             or get_bearer_token_provider(AzureCliCredential(), LLM_TOKEN_SCOPE),
+            # As many retries as the service's default, so rate limits don't fail evaluations.
+            max_retries=6,
         ),
         judge_model,
     )

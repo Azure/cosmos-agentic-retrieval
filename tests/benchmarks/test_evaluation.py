@@ -101,5 +101,18 @@ def test_erb_passage_ids_round_trip_and_count_each_document_once(monkeypatch, st
     passages = document.get_passages()
 
     assert all(erb.ERBDocument.read_doc_id(passage.id) == passage.doc_id for passage in passages)
-    response = AgentResponse("", [passage.id for passage in passages])
-    assert ERBEvaluator(Mock()).read_returned_doc_ids(response) == {document.doc_id}
+    assert ERBEvaluator(Mock()).read_doc_ids([passage.id for passage in passages]) == {document.doc_id}
+
+
+@pytest.mark.parametrize("cited, recall", [(["gold-1", "gold-0"], 0.5), (["other-0"], 0.0), (None, None)])
+def test_erb_cited_recall_counts_only_the_cited_chunks_documents(cited, recall):
+    question = erb.ERBQuestion(
+        id="q1", dataset="enterprise-rag-bench", question="Q?", category="basic",
+        source_types=(), expected_doc_ids=("gold", "missing"), gold_answer="", answer_facts=(),
+    )
+    response = AgentResponse("", ["gold-0", "gold-1", "other-0"], cited)
+
+    scores = ERBEvaluator(Mock()).evaluate(question, response).scores
+
+    assert scores["returned_document_recall"] == 0.5
+    assert scores["cited_document_recall"] == recall

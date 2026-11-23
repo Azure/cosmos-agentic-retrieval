@@ -7,6 +7,7 @@ import json
 import pytest
 
 from cosmos_agentic_retriever.agent.loop import (
+    FINAL_TURN_INSTRUCTION,
     LlmTurn,
     ModelError,
     TokenUsage,
@@ -57,9 +58,11 @@ class _ScriptedModel:
     def __init__(self, turns: list[LlmTurn]) -> None:
         self._turns = list(turns)
         self.messages_seen: list[list[dict]] = []
+        self.tools_seen: list[list[str]] = []
 
     async def __call__(self, messages, tools):
         self.messages_seen.append([dict(message) for message in messages])
+        self.tools_seen.append([tool.name for tool in tools])
         return self._turns.pop(0)
 
 
@@ -126,6 +129,22 @@ async def test_stops_at_max_turns_when_model_keeps_calling():
     )
     assert result.terminal_reason == "max_turns"
     assert result.turns == 3
+
+
+async def test_last_turn_offers_no_tools_and_its_reply_is_the_answer():
+    calls: list[dict] = []
+    model = _ScriptedModel(
+        [_call("c1", "full_text_search", {"query": "x"}), _call("c2", "full_text_search", {"query": "y"}), _answer("best effort")]
+    )
+    result = await run_agent_search(
+        "q", complete=model, tools=[_echo_tool(calls)], system_prompt="sys", max_turns=3
+    )
+
+    assert model.tools_seen == [["full_text_search"], ["full_text_search"], []]
+    assert model.messages_seen[-1][-1] == {"role": "user", "content": FINAL_TURN_INSTRUCTION}
+    assert result.answer == "best effort"
+    assert result.terminal_reason == "max_turns"
+    assert calls == [{"query": "x"}, {"query": "y"}]
 
 
 async def test_unknown_tool_yields_error_observation_and_continues():
