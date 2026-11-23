@@ -39,6 +39,18 @@ def toolkit_token_scope(app_id: str) -> str:
     return f"api://{app_id}/.default"
 
 
+def _split_reply(reply: str) -> tuple[str, str]:
+    """Split the agent's reply into the answer and explanation the prompt asks for.
+
+    A reply that doesn't follow that format is returned whole as the answer.
+    """
+    head, heading, explanation = reply.partition("Explanation:")
+    head = head.strip()
+    if not heading or not head.startswith("Answer:"):
+        return reply.strip(), ""
+    return head.removeprefix("Answer:").strip(), explanation.strip()
+
+
 class AgenticSearchRequest(BaseModel):
     """A question with optional discovery scope and a cap on returned evidence."""
 
@@ -160,7 +172,7 @@ def create_app(settings: AgenticSearchConfig | None = None) -> FastAPI:
             min_vector_dim=resolved.tool_result_min_vector_dim,
             dropped_fields=frozenset(resolved.tool_result_dropped_fields),
         )
-        evidence = SearchEvidence(rules)
+        evidence = SearchEvidence()
         tools = make_toolkit_tools(
             toolkit, scope=scope, rules=rules, names=names, evidence=evidence,
         )
@@ -177,9 +189,21 @@ def create_app(settings: AgenticSearchConfig | None = None) -> FastAPI:
             return JSONResponse(
                 status_code=500, content={"error": "Agent search failed."}
             )
+        if result.error is None:
+            reply, cited = evidence.verify_citations(result.answer)
+            answer, explanation = _split_reply(reply)
+        else:
+            answer, explanation, cited = "", "", []
+        # Without a finished answer nothing is cited, so return what was found instead.
+        include_uncited = (
+            resolved.returned_documents == "cited_and_ranked" or result.error is not None
+        )
         body = {
-            "answer": result.answer,
-            "documents": evidence.documents(result.answer, limit=max_documents),
+            "answer": answer,
+            "explanation": explanation,
+            "documents": evidence.documents(
+                cited, limit=max_documents, include_uncited=include_uncited
+            ),
             "terminal_reason": result.terminal_reason,
             "turns": result.turns,
             "model": client.model,
@@ -198,7 +222,10 @@ def create_app(settings: AgenticSearchConfig | None = None) -> FastAPI:
                 headers["Retry-After"] = str(error.retry_after_seconds)
             return JSONResponse(status_code=error.status_code, content=body, headers=headers)
         if evidence.errors and not evidence.searched:
-            body.update(answer="", error="Toolkit calls failed; no containers were searched.")
+            body.update(
+                answer="", explanation="",
+                error="Toolkit calls failed; no containers were searched.",
+            )
             return JSONResponse(status_code=500, content=body)
         return JSONResponse(content=body)
 

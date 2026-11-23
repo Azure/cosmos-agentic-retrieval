@@ -157,8 +157,8 @@ async def test_client_failures_pass_through():
     assert result.error == "The toolkit call failed: ConnectionError"
 
 
-async def test_evidence_keeps_full_text_without_embeddings_or_system_fields():
-    evidence = SearchEvidence(RULES)
+async def test_evidence_returns_references_without_document_text():
+    evidence = SearchEvidence()
     toolkit = _FakeToolkit()
 
     result = await _tools(toolkit, evidence=evidence)["text_search"](
@@ -166,20 +166,32 @@ async def test_evidence_keeps_full_text_without_embeddings_or_system_fields():
     )
 
     assert "more characters" in result.content
-    [document] = evidence.documents("", limit=10)
-    assert document == {
-        "database": "db",
-        "container": "c",
-        "id": "d1",
-        "document": {
-            "id": "d1", "text": "a" * 25, "embedding": "[4-dimension vector omitted]"
-        },
-    }
+    answer, cited = evidence.verify_citations("It says a [db/c/d1].")
+    assert answer == "It says a [db/c/d1]."
+    assert evidence.documents(cited, limit=10, include_uncited=False) == [
+        {"database": "db", "container": "c", "id": "d1", "used_in_answer": True},
+    ]
     assert evidence.searched == [{"database": "db", "container": "c"}]
 
 
-def test_evidence_deduplicates_by_source_merges_ranks_and_prefers_citations():
-    evidence = SearchEvidence(RULES)
+def test_citations_keep_answer_order_and_mark_made_up_ones():
+    evidence = SearchEvidence()
+    evidence.record("text_search", {"databaseId": "db", "containerId": "c"},
+                    ToolExecutionResult(content='[{"id":"a"},{"id":"b"}]'))
+
+    answer, cited = evidence.verify_citations(
+        "B [db/c/b]. A [db/c/a], again [db/c/b]. C [db/c/made-up] and [db/other/a]."
+    )
+
+    assert answer == (
+        "B [db/c/b]. A [db/c/a], again [db/c/b]. C [unverified source] and [unverified source]."
+    )
+    assert cited == [("db", "c", "b"), ("db", "c", "a")]
+    assert [item["id"] for item in evidence.documents(cited, limit=1, include_uncited=False)] == ["b"]
+
+
+def test_evidence_deduplicates_by_source_merges_ranks_and_puts_citations_first():
+    evidence = SearchEvidence()
     arguments = {"databaseId": "db", "containerId": "c"}
     evidence.record("text_search", arguments, ToolExecutionResult(content=json.dumps([
         {"id": "first"}, {"id": "repeated"}, {"id": "cited"}
@@ -190,22 +202,27 @@ def test_evidence_deduplicates_by_source_merges_ranks_and_prefers_citations():
     evidence.record("find_document_by_id", {**arguments, "containerId": "other"},
                     ToolExecutionResult(content='{"id":"first","text":"read"}'))
 
-    assert [item["id"] for item in evidence.documents("", limit=2)] == ["repeated", "first"]
-    documents = evidence.documents("Sources: [db/c/cited]", limit=10)
-    assert documents[0]["id"] == "cited"
-    assert len(documents) == 4
+    ranked = evidence.documents([], limit=2, include_uncited=True)
+    assert [item["id"] for item in ranked] == ["repeated", "first"]
+    _, cited = evidence.verify_citations("x [db/c/cited]")
+    assert evidence.documents(cited, limit=10, include_uncited=False) == [
+        {"database": "db", "container": "c", "id": "cited", "used_in_answer": True},
+    ]
+    documents = evidence.documents(cited, limit=10, include_uncited=True)
+    assert [item["used_in_answer"] for item in documents] == [True, False, False, False]
     assert documents[-1]["container"] == "other"
 
 
 async def test_evidence_records_toolkit_errors_and_does_not_invent_documents():
-    evidence = SearchEvidence(RULES)
+    evidence = SearchEvidence()
     toolkit = _FakeToolkit(ToolExecutionResult(content='{"error":"busy","statusCode":429}'))
 
     await _tools(toolkit, evidence=evidence)["text_search"](databaseId="db", containerId="c")
 
     assert evidence.document_calls == 1
     assert evidence.searched == []
-    assert evidence.documents("Sources: [db/c/nonexistent]", limit=5) == []
+    assert evidence.verify_citations("x [db/c/nonexistent]") == ("x [unverified source]", [])
+    assert evidence.documents([], limit=5, include_uncited=True) == []
     assert evidence.errors == [{
         "tool": "text_search", "database": "db", "container": "c",
         "error": "busy (status 429)",
@@ -213,7 +230,7 @@ async def test_evidence_records_toolkit_errors_and_does_not_invent_documents():
 
 
 def test_empty_search_is_successful_and_discovery_is_not_evidence():
-    evidence = SearchEvidence(RULES)
+    evidence = SearchEvidence()
     arguments = {"databaseId": "db", "containerId": "c"}
     evidence.record("get_approximate_schema", arguments,
                     ToolExecutionResult(content='{"id":"not-a-document"}'))
@@ -221,16 +238,4 @@ def test_empty_search_is_successful_and_discovery_is_not_evidence():
 
     assert evidence.document_calls == 1
     assert evidence.searched == [{"database": "db", "container": "c"}]
-    assert evidence.documents("", limit=5) == []
-
-
-def test_projected_results_do_not_erase_a_previously_read_document():
-    evidence = SearchEvidence(RULES)
-    arguments = {"databaseId": "db", "containerId": "c"}
-    evidence.record("find_document_by_id", arguments,
-                    ToolExecutionResult(content='{"id":"d1","text":"full text"}'))
-    evidence.record("vector_search", arguments,
-                    ToolExecutionResult(content='[{"id":"d1","score":0.8}]'))
-
-    [item] = evidence.documents("", limit=1)
-    assert item["document"] == {"id": "d1", "text": "full text", "score": 0.8}
+    assert evidence.documents([], limit=5, include_uncited=True) == []
