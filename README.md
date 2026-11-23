@@ -1,14 +1,26 @@
 # Azure Cosmos DB Agentic Retrieval (Private Preview)
 
+[Prerequisites](#prerequisites) |
+[Quick Start](#quick-start) |
+[Configuration](#updating-the-configuration) |
+[Limitations](#limitations) |
+[Local Testing](#run-locally-for-testing) |
+[Benchmarks](#benchmarks)
+
+---
+
+![Architecture overview: an MCP client connects to the toolkit, which hosts agentic search alongside the retrieval service; the service uses a chat model and toolkit tools to search Azure Cosmos DB.](docs/images/agentic-retrieval-overview.svg)
+
 This repository provides an agentic-search service for Azure Cosmos DB. It works
 with the [Azure Cosmos DB MCP Toolkit](https://github.com/AzureCosmosDB/MCPToolKit),
 called "the toolkit" in the rest of this README. Users can ask an agent a
 natural-language question; the agent searches with the toolkit's tools and
 returns the answer with its supporting documents.
 
-This feature is exposed as the toolkit's `agentic_search` tool. It is currently
-in private preview; to join, fill in the
-[private preview form](https://forms.cloud.microsoft/r/eMm2ARSxnH).
+> [!IMPORTANT]
+> This feature is exposed as the toolkit's `agentic_search` tool. It is currently
+> in private preview; to join, fill in the
+> [private preview form](https://forms.cloud.microsoft/r/eMm2ARSxnH).
 
 ## Prerequisites
 
@@ -27,16 +39,16 @@ in private preview; to join, fill in the
 The agent searches with the toolkit's full-text, vector and hybrid search. Your cosmos DB
 containers need to be set up for the kinds of search you want it to use:
 
-- *Full-text search.* A
+- **Full-text search.** A
   [full-text policy and index](https://learn.microsoft.com/azure/cosmos-db/gen-ai/full-text-search)
   on the searched fields. Without them, searches still run but use more RUs and
   are slower.
-- *Vector search.* Stored embeddings, with a
+- **Vector search.** Stored embeddings, with a
   [vector policy](https://learn.microsoft.com/azure/cosmos-db/vector-search)
   on the embedding field, and preferably a vector index. The toolkit must be
   configured with the embedding model that produced the embeddings
   (`OPENAI_ENDPOINT` and `OPENAI_EMBEDDING_DEPLOYMENT`).
-- *[Hybrid search](https://learn.microsoft.com/azure/cosmos-db/gen-ai/hybrid-search).*
+- **[Hybrid search](https://learn.microsoft.com/azure/cosmos-db/gen-ai/hybrid-search).**
   Both of the above.
 
 ## Quick Start
@@ -62,9 +74,10 @@ llm_base_url: https://YOUR-ENDPOINT/openai/v1
 llm_model: YOUR-MODEL
 ```
 
-The service calls the model and the toolkit with the app's managed identity.
-The configuration is built into the service's image; the script refuses a file
-with `llm_api_key`.
+> [!NOTE]
+> The service calls the model and the toolkit with the app's managed identity.
+> The configuration is built into the service's image; the script refuses a file
+> with `llm_api_key`.
 
 ### Step 3: Add the service to the toolkit app
 
@@ -79,9 +92,9 @@ hosts the model:
 
 To find these values:
 
-- *Resource group and Container App name.* List your Container Apps:
+- **Resource group and Container App name.** List your Container Apps:
   `az containerapp list --output table`.
-- *Model resource ID.* In the Azure portal, open the Azure OpenAI or Azure AI
+- **Model resource ID.** In the Azure portal, open the Azure OpenAI or Azure AI
   Foundry resource and select *JSON View* on its overview page, or run
   `az cognitiveservices account show --name <resource-name> --resource-group <resource-group> --query id --output tsv`.
 
@@ -102,7 +115,6 @@ and ask a question that uses `agentic_search`.
 Specify a `database` and, optionally, a `container` to limit the search.
 Omit both to let the agent discover where to search.
 
-
 ## Updating the configuration
 
 To change the configuration, edit `config.deploy.yaml` and run the script from
@@ -110,17 +122,18 @@ Step 3 again. It builds a new image and replaces the service's container.
 
 ## Limitations
 
-- *Read-only.* The service never creates or changes databases, containers,
+- **Read-only.** The service never creates or changes databases, containers,
   indexes, or documents.
-- *Shares access control with the toolkit.* Only callers allowed to use
+- **Shares access control with the toolkit.** Only callers allowed to use
   `agentic_search` through the toolkit reach the service, which listens only
   inside the app. As with the toolkit's other tools, searches use the toolkit's
   Cosmos permissions, not the individual caller's.
 
 ## Run Locally for Testing
 
-Running the service on your own machine is for testing and development only,
-not for serving users.
+> [!WARNING]
+> Running the service on your own machine is for testing and development only,
+> not for serving users.
 
 ```bash
 python -m pip install .

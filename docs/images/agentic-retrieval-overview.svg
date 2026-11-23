@@ -1,0 +1,81 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="680" viewBox="0 0 1200 680" role="img" aria-labelledby="title description">
+  <title id="title">Azure Cosmos DB Agentic Retrieval overview</title>
+  <desc id="description">An MCP client calls agentic_search through the Azure Cosmos DB MCP Toolkit. The toolkit and retrieval service share an Azure Container App. The service uses a chat model and calls the toolkit's search tools to retrieve documents from Azure Cosmos DB, returning an answer with supporting documents.</desc>
+  <defs>
+    <linearGradient id="background" x2="1" y2="1">
+      <stop stop-color="#0b1730"/>
+      <stop offset="1" stop-color="#123b58"/>
+    </linearGradient>
+    <linearGradient id="accent" x2="1" y2="0">
+      <stop stop-color="#38bdf8"/>
+      <stop offset="1" stop-color="#67e8f9"/>
+    </linearGradient>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 Z" fill="#7dd3fc"/>
+    </marker>
+  </defs>
+
+  <rect width="1200" height="680" rx="24" fill="url(#background)"/>
+  <rect x="44" y="40" width="48" height="5" rx="2.5" fill="url(#accent)"/>
+  <g font-family="Segoe UI, Arial, sans-serif">
+    <text x="44" y="88" fill="#f8fafc" font-size="34" font-weight="700">Azure Cosmos DB Agentic Retrieval</text>
+    <text x="44" y="121" fill="#cbd5e1" font-size="18">Natural-language questions. Toolkit-powered search. Answers with supporting documents.</text>
+
+    <rect x="286" y="168" width="870" height="300" rx="18" fill="#163751" stroke="#47728e" stroke-dasharray="6 6"/>
+    <text x="310" y="202" fill="#bae6fd" font-size="15" font-weight="600">AZURE CONTAINER APP</text>
+    <text x="1132" y="202" text-anchor="end" fill="#cbd5e1" font-size="14">Shared managed identity</text>
+
+    <g fill="none" stroke="#7dd3fc" stroke-width="2" marker-start="url(#arrow)" marker-end="url(#arrow)">
+      <path d="M 248 308 H 322"/>
+      <path d="M 491 372 V 522"/>
+      <path d="M 951 372 V 522"/>
+    </g>
+    <g fill="none" stroke="#7dd3fc" stroke-width="2" marker-end="url(#arrow)">
+      <path d="M 660 282 H 782"/>
+      <path d="M 786 340 H 664"/>
+    </g>
+    <g fill="#e0f2fe" font-size="13" text-anchor="middle">
+      <text x="721" y="269">agentic_search</text>
+      <text x="721" y="365">MCP tools</text>
+    </g>
+    <g fill="#cbd5e1" font-size="14">
+      <text x="507" y="498">Search + documents</text>
+      <text x="967" y="498">Model calls</text>
+    </g>
+
+    <rect x="44" y="248" width="200" height="124" rx="14" fill="#f8fafc"/>
+    <rect x="68" y="271" width="30" height="22" rx="4" fill="none" stroke="#0369a1" stroke-width="2"/>
+    <path d="M 74 300 H 92 M 83 293 V 300" fill="none" stroke="#0369a1" stroke-width="2"/>
+    <text x="68" y="329" fill="#0f172a" font-size="20" font-weight="700">MCP client</text>
+    <text x="68" y="353" fill="#475569" font-size="14">Ask a question</text>
+
+    <rect x="326" y="248" width="330" height="124" rx="14" fill="#f8fafc"/>
+    <rect x="326" y="265" width="4" height="90" rx="2" fill="#0284c7"/>
+    <text x="350" y="280" fill="#0369a1" font-size="12" font-weight="700" letter-spacing="1">TOOLKIT</text>
+    <text x="350" y="313" fill="#0f172a" font-size="22" font-weight="700">Azure Cosmos DB MCP</text>
+    <text x="350" y="343" fill="#475569" font-size="15">Full-text, vector and hybrid search</text>
+
+    <rect x="786" y="248" width="330" height="124" rx="14" fill="#f8fafc"/>
+    <rect x="786" y="265" width="4" height="90" rx="2" fill="#0891b2"/>
+    <text x="810" y="280" fill="#0e7490" font-size="12" font-weight="700" letter-spacing="1">RETRIEVAL SERVICE</text>
+    <text x="810" y="313" fill="#0f172a" font-size="22" font-weight="700">Agentic retrieval</text>
+    <text x="810" y="343" fill="#475569" font-size="15">Search with tools and answer</text>
+
+    <text x="310" y="436" fill="#cbd5e1" font-size="14">The service listens only inside the app; clients connect through the toolkit.</text>
+
+    <rect x="326" y="526" width="330" height="110" rx="14" fill="#102c44" stroke="#47728e"/>
+    <g fill="none" stroke="#67e8f9" stroke-width="2">
+      <ellipse cx="365" cy="561" rx="15" ry="6"/>
+      <path d="M 350 561 V 589 C 350 597 380 597 380 589 V 561 M 350 575 C 350 583 380 583 380 575"/>
+    </g>
+    <text x="400" y="570" fill="#f8fafc" font-size="21" font-weight="600">Azure Cosmos DB</text>
+    <text x="400" y="598" fill="#cbd5e1" font-size="15">Your documents</text>
+
+    <rect x="786" y="526" width="330" height="110" rx="14" fill="#102c44" stroke="#47728e"/>
+    <g fill="none" stroke="#67e8f9" stroke-width="2" stroke-linejoin="round">
+      <path d="M 825 551 L 830 567 L 846 572 L 830 577 L 825 593 L 820 577 L 804 572 L 820 567 Z"/>
+    </g>
+    <text x="864" y="570" fill="#f8fafc" font-size="21" font-weight="600">Chat model</text>
+    <text x="864" y="598" fill="#cbd5e1" font-size="15">Azure OpenAI / AI Foundry</text>
+  </g>
+</svg>
