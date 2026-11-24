@@ -132,6 +132,11 @@ Step 3 again. It builds a new image and replaces the service's container.
   `agentic_search` through the toolkit reach the service, which listens only
   inside the app. As with the toolkit's other tools, searches use the toolkit's
   Cosmos permissions, not the individual caller's.
+- **Works best when items share the searched fields.** Since Cosmos DB doesn't
+  enforce a schema, the agent discovers a container's fields from a sample
+  of 10 items, and sees only top-level fields. Each search looks at one field:
+  items without that field (or, for vector and hybrid search, without an
+  embedding) aren't found by that search. 
 
 ## Run Locally for Testing
 
