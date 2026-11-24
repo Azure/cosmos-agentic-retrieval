@@ -41,15 +41,19 @@ containers need to be set up for the kinds of search you want it to use:
 
 - **Full-text search.** A
   [full-text policy and index](https://learn.microsoft.com/azure/cosmos-db/gen-ai/full-text-search)
-  on the searched fields. Without them, searches still run but use more RUs and
-  are slower.
+  on the searched fields. The toolkit's full-text search finds documents whose
+  field contains the given search phrase. It matches words rather than exact
+  characters (for example, plurals), but doesn't rank the results. The
+  full-text index makes finding them fast; without it, the search still runs
+  but reads every document, using more RUs and taking longer.
 - **Vector search.** Stored embeddings, with a
   [vector policy](https://learn.microsoft.com/azure/cosmos-db/vector-search)
   on the embedding field, and preferably a vector index. The toolkit must be
   configured with the embedding model that produced the embeddings
   (`OPENAI_ENDPOINT` and `OPENAI_EMBEDDING_DEPLOYMENT`).
 - **[Hybrid search](https://learn.microsoft.com/azure/cosmos-db/gen-ai/hybrid-search).**
-  Both of the above.
+  Both of the above. Hybrid search ranks documents by combining vector
+  similarity with a BM25 keyword score, which needs the full-text index.
 
 ## Quick Start
 
@@ -128,6 +132,11 @@ Step 3 again. It builds a new image and replaces the service's container.
   `agentic_search` through the toolkit reach the service, which listens only
   inside the app. As with the toolkit's other tools, searches use the toolkit's
   Cosmos permissions, not the individual caller's.
+- **Works best when items share the searched fields.** Since Cosmos DB doesn't
+  enforce a schema, the agent discovers a container's fields from a sample
+  of 10 items, and sees only top-level fields. Each search looks at one field:
+  items without that field (or, for vector and hybrid search, without an
+  embedding) aren't found by that search. 
 
 ## Run Locally for Testing
 
