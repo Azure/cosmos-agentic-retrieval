@@ -1,7 +1,8 @@
 """Contracts for question-answering benchmarks, and loading them into Document, Passage and Question objects.
 
 To add a dataset, subclass `BenchmarkDataset`, or `HFBenchmarkDataset` for one
-stored on Hugging Face.
+stored on Hugging Face. Documents too long to search whole subclass
+`ChunkedDocument`.
 """
 
 from __future__ import annotations
@@ -13,6 +14,8 @@ from pathlib import Path
 from typing import ClassVar
 
 from huggingface_hub import hf_hub_download
+
+from chunking import split_text_into_chunks
 
 
 @dataclass(frozen=True)
@@ -56,6 +59,52 @@ class Document:
 
 
 @dataclass(frozen=True)
+class ChunkedPassage(Passage):
+    """One chunk of a long document, with the document's ID in its dataset."""
+
+    doc_id: str
+    chunk_idx: int
+
+
+@dataclass(frozen=True)
+class ChunkedDocument(Document):
+    """A long document stored as overlapping chunks, each a passage with ID "<document id>-<chunk index>".
+
+    A dataset whose chunks carry more fields overrides make_passage.
+    """
+
+    # Items don't record these, so name the container after them, e.g. enterprise-rag-bench-c512-o128.
+    CHUNK_MAX_TOKENS: ClassVar[int] = 512
+    CHUNK_OVERLAP_TOKENS: ClassVar[int] = 128
+
+    # The document's ID in its dataset, which the questions refer to.
+    doc_id: str
+
+    def get_passages(self) -> list[Passage]:
+        chunks = split_text_into_chunks(self.text, self.CHUNK_MAX_TOKENS, self.CHUNK_OVERLAP_TOKENS)
+        return [self.make_passage(index, chunk) for index, chunk in enumerate(chunks)]
+
+    def make_passage(self, chunk_idx: int, text: str) -> ChunkedPassage:
+        """Return the passage that stores one chunk of this document."""
+        return ChunkedPassage(
+            id=f"{self.id}-{chunk_idx}",
+            title=self.title,
+            text=text,
+            datasets=self.datasets,
+            doc_id=self.doc_id,
+            chunk_idx=chunk_idx,
+        )
+
+    @classmethod
+    def read_doc_id(cls, passage_id: str) -> str:
+        """The dataset's document ID of a passage ID made by get_passages, e.g. "abc-3" -> "abc".
+
+        A dataset that stores documents under other IDs than its own overrides this.
+        """
+        return passage_id.rsplit("-", 1)[0]
+
+
+@dataclass(frozen=True)
 class Question:
     """One benchmark question as sent to the agent.
 
@@ -88,14 +137,18 @@ class HFBenchmarkDataset(BenchmarkDataset):
     repo: ClassVar[str]
     revision: ClassVar[str]
 
-    def download_file(self, file_name: str) -> Path:
-        """Return a local copy of one repository file, using the Hugging Face cache."""
+    def download_file(self, file_name: str, repo: str | None = None, revision: str | None = None) -> Path:
+        """Return a local copy of one repository file, using the Hugging Face cache.
+
+        Pass repo and revision for a dataset published as several repositories,
+        e.g. its questions and its corpus.
+        """
         return Path(
             hf_hub_download(
-                repo_id=self.repo,
+                repo_id=repo or self.repo,
                 filename=file_name,
                 repo_type="dataset",
-                revision=self.revision,
+                revision=revision or self.revision,
             )
         )
 

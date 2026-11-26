@@ -4,64 +4,43 @@ from __future__ import annotations
 
 import re
 from collections import Counter
-from dataclasses import dataclass
-from typing import ClassVar
+from dataclasses import asdict, dataclass
 
 import pyarrow.parquet as pq
 
-from chunking import split_text_into_chunks
 from dataset_contracts import (
     BenchmarkCollection,
-    Document,
+    ChunkedDocument,
+    ChunkedPassage,
     HFBenchmarkDataset,
-    Passage,
     Question,
 )
 
 
 @dataclass(frozen=True)
-class ERBPassage(Passage):
-    """One chunk of a document, with the document's EnterpriseRAG-Bench ID and source tool."""
+class ERBPassage(ChunkedPassage):
+    """One chunk of a document, with the document's source tool."""
 
-    doc_id: str
-    chunk_idx: int
     source_type: str
 
 
 @dataclass(frozen=True)
-class ERBDocument(Document):
-    """A document from one workplace tool, e.g. a Slack thread or a Jira ticket, split into chunks when stored."""
+class ERBDocument(ChunkedDocument):
+    """A document from one workplace tool, e.g. a Slack thread or a Jira ticket, split into chunks when stored.
 
-    # Items don't record these, so name the container after them, e.g. enterprise-rag-bench-c512-o128.
-    CHUNK_MAX_TOKENS: ClassVar[int] = 512
-    CHUNK_OVERLAP_TOKENS: ClassVar[int] = 128
+    A few EnterpriseRAG-Bench IDs are shared by two different documents, so the
+    stored ID gets a suffix for every copy after the first.
+    """
 
-    # EnterpriseRAG-Bench's ID; a few IDs are shared by two different documents,
-    # so the stored ID gets a suffix for every copy after the first.
-    doc_id: str
     source_type: str
 
-    def get_passages(self) -> list[Passage]:
-        return [
-            ERBPassage(
-                id=f"{self.id}-{index}",
-                title=self.title,
-                text=chunk,
-                datasets=self.datasets,
-                doc_id=self.doc_id,
-                chunk_idx=index,
-                source_type=self.source_type,
-            )
-            for index, chunk in enumerate(
-                split_text_into_chunks(self.text, self.CHUNK_MAX_TOKENS, self.CHUNK_OVERLAP_TOKENS)
-            )
-        ]
+    def make_passage(self, chunk_idx: int, text: str) -> ERBPassage:
+        return ERBPassage(**asdict(super().make_passage(chunk_idx, text)), source_type=self.source_type)
 
-    @staticmethod
-    def read_doc_id(passage_id: str) -> str:
+    @classmethod
+    def read_doc_id(cls, passage_id: str) -> str:
         """The ERB document ID of a passage ID made by get_passages, e.g. "abc-copy2-3" -> "abc"."""
-        stored_id = passage_id.rsplit("-", 1)[0]
-        return re.sub(r"-copy\d+$", "", stored_id)
+        return re.sub(r"-copy\d+$", "", super().read_doc_id(passage_id))
 
 
 @dataclass(frozen=True)
