@@ -30,11 +30,13 @@ from azure.identity import AzureCliCredential, get_bearer_token_provider
 from openai import OpenAI
 from tqdm import tqdm
 
+from dataset_browsecomp_plus import BrowseCompPlusCollection
 from dataset_contracts import Passage
 from dataset_enterprise_rag_bench import EnterpriseRAGBenchCollection
 from dataset_hipporag2 import HippoRAG2Collection
 
 COLLECTIONS = {
+    "browsecomp-plus": BrowseCompPlusCollection,
     "enterprise-rag-bench": EnterpriseRAGBenchCollection,
     "hipporag2": HippoRAG2Collection,
 }

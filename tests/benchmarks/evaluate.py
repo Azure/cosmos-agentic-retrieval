@@ -29,20 +29,27 @@ from openai import OpenAI
 from tqdm import tqdm
 
 from cosmos_agentic_retriever.server import LLM_TOKEN_SCOPE
+from dataset_browsecomp_plus import BrowseCompPlusCollection
 from dataset_contracts import Question
 from dataset_enterprise_rag_bench import EnterpriseRAGBenchCollection
 from dataset_hipporag2 import HippoRAG2Collection
 from evaluation_contracts import AgentResponse, Evaluator, Judge
+from evaluator_browsecomp_plus import BrowseCompPlusEvaluator
 from evaluator_enterprise_rag_bench import ERBEvaluator
 from evaluator_hipporag2 import HippoRAGEvaluator
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 COLLECTIONS = {
+    "browsecomp-plus": BrowseCompPlusCollection,
     "enterprise-rag-bench": EnterpriseRAGBenchCollection,
     "hipporag2": HippoRAG2Collection,
 }
 # Each collection's default evaluator; --evaluator picks another.
-EVALUATORS = {"enterprise-rag-bench": ERBEvaluator, "hipporag2": HippoRAGEvaluator}
+EVALUATORS = {
+    "browsecomp-plus": BrowseCompPlusEvaluator,
+    "enterprise-rag-bench": ERBEvaluator,
+    "hipporag2": HippoRAGEvaluator,
+}
 
 
 def read_category(question: Question | None) -> str | None:

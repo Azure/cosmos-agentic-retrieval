@@ -51,11 +51,13 @@ from tqdm import tqdm
 
 from cosmos_agentic_retriever.config import AgenticSearchConfig
 from cosmos_agentic_retriever.server import create_app
+from dataset_browsecomp_plus import BrowseCompPlusCollection
 from dataset_contracts import Question
 from dataset_enterprise_rag_bench import EnterpriseRAGBenchCollection
 from dataset_hipporag2 import HippoRAG2Collection
 
 COLLECTIONS = {
+    "browsecomp-plus": BrowseCompPlusCollection,
     "enterprise-rag-bench": EnterpriseRAGBenchCollection,
     "hipporag2": HippoRAG2Collection,
 }
