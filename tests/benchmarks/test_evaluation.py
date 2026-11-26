@@ -13,10 +13,11 @@ pytest.importorskip("tiktoken")
 
 import dataset_contracts
 import dataset_enterprise_rag_bench as erb
-from dataset_browsecomp_plus import BrowseCompPlus, BrowseCompPlusDocument
+from dataset_browsecomp_plus import BrowseCompPlus, BrowseCompPlusDocument, BrowseCompPlusQuestion
 from dataset_contracts import Document
 from dataset_hipporag2 import HippoRAG2Collection, HippoRAGQuestion
 from evaluation_contracts import AgentResponse
+from evaluator_browsecomp_plus import BrowseCompPlusEvaluator
 from evaluator_enterprise_rag_bench import ERBEvaluator
 from evaluator_hipporag2 import HippoRAGEvaluator
 
@@ -169,3 +170,55 @@ def test_browsecomp_plus_passages_keep_page_id_and_url(monkeypatch):
     assert [passage.id for passage in passages] == ["5412-0", "5412-1"]
     assert all(BrowseCompPlusDocument.read_doc_id(passage.id) == "5412" for passage in passages)
     assert all(passage.url == "https://example.com" for passage in passages)
+
+
+BROWSECOMP_PLUS_QUESTION = BrowseCompPlusQuestion(
+    id="q1", dataset="browsecomp-plus", question="Q?", answer="A",
+    evidence_doc_ids=("gold", "evidence", "unreturned", "other"), gold_doc_ids=("gold", "unreturned"),
+)
+
+
+@pytest.mark.parametrize(
+    "reply, correct",
+    [
+        ("extracted_final_answer: A\nreasoning: Matches.\ncorrect: yes\nconfidence: 100", 1.0),
+        ("**extracted_final_answer:** B\n**reasoning:** It is correct: yes, in part.\n**correct:** no", 0.0),
+        ("**correct**: Yes", 1.0),
+    ],
+)
+def test_browsecomp_plus_reads_the_judges_verdict_line(reply, correct):
+    judge = Mock()
+    judge.ask.return_value = (reply, {"prompt_tokens": 10, "completion_tokens": 5})
+
+    result = BrowseCompPlusEvaluator(judge).evaluate(BROWSECOMP_PLUS_QUESTION, AgentResponse("A", []))
+
+    assert result.scores["correct"] == correct
+    assert result.judge_tokens == {"prompt_tokens": 10, "completion_tokens": 5}
+
+
+def test_browsecomp_plus_rejects_a_judge_reply_without_a_verdict():
+    judge = Mock()
+    judge.ask.return_value = ("reasoning: unsure", {"prompt_tokens": 1, "completion_tokens": 1})
+
+    with pytest.raises(ValueError, match="correct: yes\\|no"):
+        BrowseCompPlusEvaluator(judge).evaluate(BROWSECOMP_PLUS_QUESTION, AgentResponse("A", []))
+
+
+@pytest.mark.parametrize(
+    "cited, cited_evidence, cited_gold",
+    [(["gold-1", "gold-0"], 0.25, 0.5), ([], 0.0, 0.0), (None, None, None)],
+)
+def test_browsecomp_plus_recall_counts_pages_among_returned_and_cited_chunks(cited, cited_evidence, cited_gold):
+    judge = Mock()
+    response = AgentResponse("", ["gold-0", "gold-1", "evidence-3", "negative-0"], cited)
+
+    scores = BrowseCompPlusEvaluator(judge).evaluate(BROWSECOMP_PLUS_QUESTION, response).scores
+
+    assert scores == {
+        "correct": 0.0,
+        "returned_evidence_recall": 0.5,
+        "returned_gold_recall": 0.5,
+        "cited_evidence_recall": cited_evidence,
+        "cited_gold_recall": cited_gold,
+    }
+    judge.ask.assert_not_called()
