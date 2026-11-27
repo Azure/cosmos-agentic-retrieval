@@ -23,11 +23,12 @@ import dataset_contracts
 import dataset_enterprise_rag_bench as erb
 from dataset_browsecomp_plus import BrowseCompPlus, BrowseCompPlusDocument, BrowseCompPlusQuestion
 from dataset_contracts import Document
-from dataset_harvey_firm_knowledge import HarveyCriterion, HarveyDocument, HarveyFirmKnowledge
+from dataset_harvey_firm_knowledge import HarveyCriterion, HarveyDocument, HarveyFirmKnowledge, HarveyTask
 from dataset_hipporag2 import HippoRAG2Collection, HippoRAGQuestion
 from evaluation_contracts import AgentResponse
 from evaluator_browsecomp_plus import BrowseCompPlusEvaluator
 from evaluator_enterprise_rag_bench import ERBEvaluator
+from evaluator_harvey_firm_knowledge import HarveyEvaluator
 from evaluator_hipporag2 import HippoRAGEvaluator
 
 
@@ -282,3 +283,63 @@ def test_harvey_documents_are_stored_under_a_hash_of_their_path(monkeypatch):
     )
     assert all(HarveyDocument.read_doc_id(passage.id) == document.id for passage in passages)
     assert all(passage.matter_id == "1001-00001" for passage in passages)
+
+
+@pytest.fixture
+def harvey_store(tmp_path, monkeypatch):
+    """A document store with one file in each of matters 1003-00001 and 2000-00001."""
+    for store_path in ("matters/1003-00001/hsr/request.eml", "matters/2000-00001/memo.eml"):
+        (tmp_path / "dms" / store_path).parent.mkdir(parents=True)
+        (tmp_path / "dms" / store_path).write_text("Text")
+    monkeypatch.setattr(HarveyFirmKnowledge, "download_folder", lambda self, folder: tmp_path)
+
+
+def harvey_task(*criteria_text):
+    criteria = tuple(HarveyCriterion(f"C-{i}", title, "Matches.") for i, title in enumerate(criteria_text))
+    return HarveyTask(id="001", dataset="harvey-firm-knowledge", question="Q?", title="HSR requests", criteria=criteria)
+
+
+@pytest.mark.usefixtures("harvey_store")
+def test_harvey_reads_each_criterions_verdict_and_never_passes_an_unreadable_one():
+    judge = Mock()
+    judge.ask.side_effect = [
+        ('```json\n{"reasoning": "Named.", "verdict": "pass"}\n```', {"prompt_tokens": 10, "completion_tokens": 2}),
+        ('{"reasoning": "Missing.", "verdict": "FAIL"}', {"prompt_tokens": 10, "completion_tokens": 2}),
+        ("I think it passes.", {"prompt_tokens": 10, "completion_tokens": 2}),
+    ]
+
+    result = HarveyEvaluator(judge).evaluate(harvey_task("A", "B", "C"), AgentResponse("Answer", []))
+
+    assert [v["verdict"] for v in json.loads(result.details["criteria"])] == ["pass", "fail", "error"]
+    assert result.scores["correct"] == 0.0
+    assert result.scores["criteria_passed"] == pytest.approx(1 / 3)
+    assert result.scores["criteria_with_unreadable_verdict"] == 1.0
+    assert result.judge_tokens == {"prompt_tokens": 30, "completion_tokens": 6}
+    assert "## Task\nHSR requests\n" in judge.ask.call_args.args[0]
+
+
+@pytest.mark.usefixtures("harvey_store")
+def test_harvey_task_is_correct_only_when_every_criterion_passes():
+    judge = Mock()
+    judge.ask.return_value = ('{"reasoning": "Yes.", "verdict": "pass"}', {"prompt_tokens": 1, "completion_tokens": 1})
+
+    assert HarveyEvaluator(judge).evaluate(harvey_task("A", "B"), AgentResponse("Answer", [])).scores["correct"] == 1.0
+    no_answer = HarveyEvaluator(judge).evaluate(harvey_task("A", "B"), AgentResponse("", []))
+    assert (no_answer.scores["correct"], no_answer.scores["criteria_passed"]) == (0.0, 0.0)
+    assert judge.ask.call_count == 2
+
+
+@pytest.mark.usefixtures("harvey_store")
+@pytest.mark.parametrize("cited, cited_recall", [([0], 0.5), ([1], 0.0), (None, None)])
+def test_harvey_matter_recall_counts_the_matters_the_criteria_name(cited, cited_recall):
+    judge = Mock()
+    judge.ask.return_value = ('{"verdict": "fail"}', {"prompt_tokens": 1, "completion_tokens": 1})
+    ids = [HarveyDocument.read_id(p) + "-0" for p in ("matters/1003-00001/hsr/request.eml", "matters/2000-00001/memo.eml")]
+    response = AgentResponse("Answer", ids, None if cited is None else [ids[i] for i in cited])
+
+    task = harvey_task("Qualifying matter 1003-00001", "Qualifying matter 1038-00001")
+    scores = HarveyEvaluator(judge).evaluate(task, response).scores
+
+    assert (scores["returned_matter_recall"], scores["cited_matter_recall"]) == (0.5, cited_recall)
+    no_matters = HarveyEvaluator(judge).evaluate(harvey_task("Explains the request"), response).scores
+    assert no_matters["returned_matter_recall"] is None

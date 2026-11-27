@@ -45,13 +45,23 @@ class HarveyDocument(ChunkedDocument):
     def from_store_path(cls, store_path: str, text: str, dataset: str) -> HarveyDocument:
         """Build a document from its path in the document store and its extracted text."""
         return cls(
-            id=hashlib.sha256(store_path.encode()).hexdigest()[:32],
+            id=cls.read_id(store_path),
             title=store_path,
             text=text,
             datasets=(dataset,),
             doc_id=store_path,
-            matter_id=store_path.split("/")[1],
+            matter_id=cls.read_matter_id(store_path),
         )
+
+    @staticmethod
+    def read_id(store_path: str) -> str:
+        """The stored ID of the document at a document store path."""
+        return hashlib.sha256(store_path.encode()).hexdigest()[:32]
+
+    @staticmethod
+    def read_matter_id(store_path: str) -> str:
+        """The matter of a document store path, e.g. "matters/1001-00001/memo.docx" -> "1001-00001"."""
+        return store_path.split("/")[1]
 
     def make_passage(self, chunk_idx: int, text: str) -> HarveyPassage:
         return HarveyPassage(**asdict(super().make_passage(chunk_idx, text)), matter_id=self.matter_id)
@@ -89,7 +99,7 @@ class HarveyFirmKnowledge(GitHubBenchmarkDataset):
 
     def read_corpus_documents(self) -> list[HarveyDocument]:
         store = self.download_folder(self.FOLDER) / "dms"
-        paths = sorted(path for path in store.rglob("*") if path.is_file())
+        paths = self.list_store_files(store)
         pandoc = pypandoc.get_pandoc_path()
         # Converting about 8,000 Word files runs one pandoc process per file.
         with ThreadPoolExecutor() as pool:
@@ -98,6 +108,16 @@ class HarveyFirmKnowledge(GitHubBenchmarkDataset):
             HarveyDocument.from_store_path(path.relative_to(store).as_posix(), text, self.name)
             for path, text in zip(paths, texts, strict=True)
         ]
+
+    def read_matter_ids_by_document_id(self) -> dict[str, str]:
+        """Each stored document ID's matter, read from file paths without converting the files."""
+        store = self.download_folder(self.FOLDER) / "dms"
+        store_paths = [path.relative_to(store).as_posix() for path in self.list_store_files(store)]
+        return {HarveyDocument.read_id(p): HarveyDocument.read_matter_id(p) for p in store_paths}
+
+    @staticmethod
+    def list_store_files(store: Path) -> list[Path]:
+        return sorted(path for path in store.rglob("*") if path.is_file())
 
     def read_questions(self) -> list[HarveyTask]:
         tasks = []
