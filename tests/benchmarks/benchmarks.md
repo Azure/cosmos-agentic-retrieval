@@ -2,16 +2,18 @@
 
 ## Summary
 
-| Metric                      | HippoRAG 2 | EnterpriseRAG-Bench |
-|-----------------------------|------------|---------------------|
-| Questions                   | 5,000      | 500                 |
-| Judge accuracy              | 0.801      | 0.582               |
-| Gold-document recall        | 0.798      | 0.605               |
-| p50 latency (s)             | 15.6       | 37.3                |
-| p99 latency (s)             | 61.4       | 94.4                |
-| Avg tokens / question       | 20,329     | 99,432              |
-| Cached share of input       | 79%        | 72%                 |
-| Avg cost / question (USD)   | 0.00200    | 0.00826             |
+| Metric                      | HippoRAG 2 | EnterpriseRAG-Bench | Harvey LAB |
+|-----------------------------|------------|---------------------|------------|
+| Questions                   | 5,000      | 500                 | 250        |
+| Judge accuracy              | 0.801      | 0.582               | 0.112      |
+| Gold-document recall        | 0.798      | 0.605               | —          |
+| p50 latency (s)             | 15.6       | 37.3                | 77.4       |
+| p99 latency (s)             | 61.4       | 94.4                | 127.9      |
+| Avg tokens / question       | 20,329     | 99,432              | 258,144    |
+| Cached share of input       | 79%        | 72%                 | 67%        |
+| Avg cost / question (USD)   | 0.00200    | 0.00826             | 0.02354    |
+
+Harvey LAB tasks have no gold documents, so they have no gold-document recall.
 
 ## HippoRAG 2
 
@@ -93,6 +95,37 @@ no recall or invalid extra documents.
 | Info not found   | 68.1    | 107.4   | 233,537    | 0.01835        |
 | All              | 37.3    | 94.4    | 99,432     | 0.00826        |
 
+## Harvey LAB
+
+The 250 tasks of Harvey LAB's
+[Law Firm Knowledge](https://github.com/harveyai/harvey-labs/tree/7f9b1ee19f9224576a5a5143c4e6f75842ac7020/tasks/firm-knowledge)
+set, searched over the document store of a fictional law firm: 9,288 Word,
+Excel, email and PowerPoint files across 266 matters, stored as 317,603 chunks
+of 512 tokens with 128 overlapping. Each task is graded against its rubric, 5
+to 29 criteria per task.
+
+### Quality
+
+| Questions | All criteria pass | Criteria passed | Matter recall (returned) | Matter recall (cited) |
+|-----------|-------------------|-----------------|--------------------------|-----------------------|
+| 250       | 0.112             | 0.345           | 0.370                    | 0.370                 |
+
+Most tasks ask for every matter that fits, up to 89 per task, and the agent
+returns at most 10 documents and often uses all its turns, so it lists only
+some of them.
+
+- **All criteria pass:** share of tasks where the judge passes every rubric
+  criterion; Harvey LAB's headline score and the judge accuracy above.
+- **Criteria passed:** share of a task's criteria the judge passes.
+- **Matter recall:** share of the matters a task's criteria name among the
+  matters of the returned or cited documents.
+
+### Cost
+
+| Subset | p50 (s) | p99 (s) | Avg tokens | Avg cost (USD) |
+|--------|---------|---------|------------|----------------|
+| All    | 77.4    | 127.9   | 258,144    | 0.02354        |
+
 ## Setup and Metrics
 
 - **Judge accuracy:** share of answers a model judge marks as matching the
@@ -109,7 +142,7 @@ Means are over the questions that got a response.
 
 The agent and the judge both use `gpt-5.6-luna` on Azure AI Foundry.
 HippoRAG 2 ran at commit `7ae43ad` (2026-11-18), EnterpriseRAG-Bench at
-`2b0b96c` (2026-11-19).
+`2b0b96c` (2026-11-19), Harvey LAB at `b54ade9` (2026-11-27).
 
 Costs are for the agent's model calls, at the Azure OpenAI Global Standard
 price for GPT-5.6-luna (short context) on the [Azure OpenAI pricing page][1]
