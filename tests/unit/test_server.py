@@ -55,7 +55,8 @@ def test_health_and_no_config_routes():
 
 def test_search_request_defaults() -> None:
     request = AgenticSearchRequest(query="q")
-    assert request.max_documents == 20
+    assert request.max_documents is None and request.max_turns is None
+    assert request.returned_documents is None
     assert request.database is None and request.container is None
 
 
@@ -81,7 +82,7 @@ def test_search_request_max_documents_bounds_ok(max_documents) -> None:
     )
 
 
-@pytest.mark.parametrize("value", [0, 51, True, 1.5, "5", None])
+@pytest.mark.parametrize("value", [0, 51, True, 1.5, "5"])
 def test_search_request_max_documents_out_of_range(value) -> None:
     with pytest.raises(ValidationError):
         AgenticSearchRequest(query="q", max_documents=value)

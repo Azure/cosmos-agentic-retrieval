@@ -240,6 +240,69 @@ def test_cited_and_ranked_puts_citations_first_within_the_limit(http, limit, ser
     assert not any(item["used_in_answer"] for item in documents[1:])
 
 
+def test_settings_left_out_use_soft_limits(http):
+    client, _ = http
+    client.app.state.chat_client = _FakeChat([_answer()])
+
+    response = client.post("/agentic_search", json={"query": "question"})
+
+    assert response.json()["settings_used"] == {
+        "max_turns": 10, "max_documents": 20, "returned_documents": "cited",
+    }
+
+
+@pytest.mark.parametrize("requested, hard_limit, used", [
+    (None, 3, 3), (2, 3, 2), (5, 3, 3), (5, 6, 5),
+])
+def test_turn_limit_can_be_lowered_and_raised_only_to_the_hard_limit(
+    http, requested, hard_limit, used,
+):
+    client, _ = http
+    settings = _settings(agent_turns_soft_limit=3, agent_turns_hard_limit=hard_limit)
+    chat = _FakeChat([_call(call_id=f"c{turn}") for turn in range(10)])
+    body = {"query": "question"} if requested is None else {"query": "question", "maxTurns": requested}
+    with TestClient(_app(settings)) as scoped:
+        scoped.app.state.toolkit = client.app.state.toolkit
+        scoped.app.state.chat_client = chat
+        response = scoped.post("/agentic_search", json=body)
+
+    assert len(chat.messages_seen) == used
+    assert response.json()["settings_used"]["max_turns"] == used
+
+
+@pytest.mark.parametrize("requested, used", [(None, 3), (2, 2), (9, 4)])
+def test_document_limit_defaults_to_soft_limit_and_stops_at_hard_limit(http, requested, used):
+    client, toolkit = http
+    toolkit.results["hi"] = [{"id": f"d{index}", "text": str(index)} for index in range(10)]
+    settings = _settings(
+        agent_documents_soft_limit=3, agent_documents_hard_limit=4,
+        returned_documents="cited_and_ranked",
+    )
+    body = {"query": "question"} if requested is None else {"query": "question", "maxDocuments": requested}
+    with TestClient(_app(settings)) as scoped:
+        scoped.app.state.toolkit = client.app.state.toolkit
+        scoped.app.state.chat_client = _FakeChat([_call(), _answer("It is [D10].")])
+        response = scoped.post("/agentic_search", json=body)
+
+    assert len(response.json()["documents"]) == used
+    assert response.json()["settings_used"]["max_documents"] == used
+
+
+def test_request_can_ask_for_ranked_documents_the_answer_did_not_cite(http):
+    client, toolkit = http
+    toolkit.results["hi"] = [{"id": f"d{index}", "text": str(index)} for index in range(10)]
+    client.app.state.chat_client = _FakeChat([_call(), _answer("It is [D10].")])
+
+    response = client.post(
+        "/agentic_search",
+        json={"query": "question", "maxDocuments": 3, "returnedDocuments": "cited_and_ranked"},
+    )
+
+    documents = response.json()["documents"]
+    assert [item["used_in_answer"] for item in documents] == [True, False, False]
+    assert response.json()["settings_used"]["returned_documents"] == "cited_and_ranked"
+
+
 def test_cited_mode_returns_only_cited_documents(http):
     client, toolkit = http
     toolkit.results["hi"] = [{"id": f"d{index}", "text": str(index)} for index in range(10)]
@@ -340,6 +403,8 @@ def test_simultaneous_questions_keep_evidence_separate(http):
     ({"query": "   "}, 422), ({"container": "C"}, 400),
     ({"container_filters": {}}, 422), ({"overrides": {}}, 422),
     ({"maxDocuments": 0}, 422), ({"maxDocuments": True}, 422),
+    ({"maxTurns": 0}, 422), ({"maxTurns": 51}, 422), ({"maxTurns": "5"}, 422),
+    ({"returnedDocuments": "all"}, 422),
 ])
 def test_invalid_request_never_calls_model_or_toolkit(http, options, status):
     client, toolkit = http

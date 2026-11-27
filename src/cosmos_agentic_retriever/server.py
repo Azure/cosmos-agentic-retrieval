@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import asdict
+from typing import Literal
 
 import anyio
 import structlog
@@ -52,13 +53,23 @@ def _split_reply(reply: str) -> tuple[str, str]:
 
 
 class AgenticSearchRequest(BaseModel):
-    """A question with optional discovery scope and a cap on returned evidence."""
+    """A question with optional discovery scope and per-request settings.
+
+    Settings left out use the service's soft limits; values above a hard limit
+    are lowered to it.
+    """
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
     query: str = Field(min_length=1, max_length=4096)
-    max_documents: int = Field(
-        default=20, strict=True, ge=1, le=50, alias="maxDocuments"
+    max_documents: int | None = Field(
+        default=None, strict=True, ge=1, le=50, alias="maxDocuments"
+    )
+    max_turns: int | None = Field(
+        default=None, strict=True, ge=1, le=50, alias="maxTurns"
+    )
+    returned_documents: Literal["cited", "cited_and_ranked"] | None = Field(
+        default=None, alias="returnedDocuments"
     )
     database: str | None = Field(default=None, min_length=1, max_length=256)
     container: str | None = Field(default=None, min_length=1, max_length=256)
@@ -157,7 +168,15 @@ def create_app(settings: AgenticSearchConfig | None = None) -> FastAPI:
             return JSONResponse(
                 status_code=400, content={"error": "A container requires a database."}
             )
-        max_documents = min(request.max_documents, resolved.agent_documents_hard_limit)
+        max_documents = min(
+            request.max_documents or resolved.agent_documents_soft_limit,
+            resolved.agent_documents_hard_limit,
+        )
+        max_turns = min(
+            request.max_turns or resolved.agent_turns_soft_limit,
+            resolved.agent_turns_hard_limit,
+        )
+        returned_documents = request.returned_documents or resolved.returned_documents
         scope = SearchScope(
             database=request.database,
             containers=(frozenset({request.container}) if request.container is not None else None),
@@ -182,7 +201,7 @@ def create_app(settings: AgenticSearchConfig | None = None) -> FastAPI:
                 complete=client.complete,
                 tools=tools,
                 system_prompt=build_system_prompt(scope),
-                max_turns=resolved.agent_turns_soft_limit,
+                max_turns=max_turns,
             )
         except Exception:
             logger.exception("agent_search_failed")
@@ -196,7 +215,7 @@ def create_app(settings: AgenticSearchConfig | None = None) -> FastAPI:
             answer, explanation, cited = "", "", []
         # Without a finished answer nothing is cited, so return what was found instead.
         include_uncited = (
-            resolved.returned_documents == "cited_and_ranked" or result.error is not None
+            returned_documents == "cited_and_ranked" or result.error is not None
         )
         body = {
             "answer": answer,
@@ -212,6 +231,11 @@ def create_app(settings: AgenticSearchConfig | None = None) -> FastAPI:
             "searched": evidence.searched,
             "errors": evidence.errors,
             "partial": bool(evidence.errors) and bool(evidence.searched),
+            "settings_used": {
+                "max_turns": max_turns,
+                "max_documents": max_documents,
+                "returned_documents": returned_documents,
+            },
         }
         if result.error is not None:
             error = result.error
