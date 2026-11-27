@@ -2,19 +2,28 @@
 
 import base64
 import hashlib
+import json
 from dataclasses import asdict
 from unittest.mock import Mock
 
 import pytest
 
 pytest.importorskip("huggingface_hub")
+pytest.importorskip("markitdown")
+pytest.importorskip("pandas")
 pytest.importorskip("pyarrow")
+pytest.importorskip("pypandoc")
 pytest.importorskip("tiktoken")
+
+import pandas as pd
+import pypandoc
+from pptx import Presentation
 
 import dataset_contracts
 import dataset_enterprise_rag_bench as erb
 from dataset_browsecomp_plus import BrowseCompPlus, BrowseCompPlusDocument, BrowseCompPlusQuestion
 from dataset_contracts import Document
+from dataset_harvey_firm_knowledge import HarveyCriterion, HarveyDocument, HarveyFirmKnowledge
 from dataset_hipporag2 import HippoRAG2Collection, HippoRAGQuestion
 from evaluation_contracts import AgentResponse
 from evaluator_browsecomp_plus import BrowseCompPlusEvaluator
@@ -222,3 +231,54 @@ def test_browsecomp_plus_recall_counts_pages_among_returned_and_cited_chunks(cit
         "cited_gold_recall": cited_gold,
     }
     judge.ask.assert_not_called()
+
+
+def test_harvey_reads_each_file_type_as_harvey_lab_does(tmp_path):
+    pypandoc.convert_text("# Memo\n\nThe HSR second request arrived.", "docx", format="md", outputfile=str(tmp_path / "memo.docx"))
+    with pd.ExcelWriter(tmp_path / "deals.xlsx") as writer:
+        pd.DataFrame({"Matter": ["1003-00001"], "Status": ["Second request"]}).to_excel(writer, sheet_name="Deals", index=False)
+    deck = Presentation()
+    deck.slides.add_slide(deck.slide_layouts[5]).shapes.title.text = "Closing timeline"
+    deck.save(tmp_path / "update.pptx")
+    (tmp_path / "note.eml").write_text("Subject: Second request\n\nPlease file the response.")
+    pandoc = pypandoc.get_pandoc_path()
+
+    def read(name):
+        return HarveyFirmKnowledge.read_file_text(tmp_path / name, pandoc)
+
+    assert read("memo.docx").startswith("# Memo\n\nThe HSR second request arrived.")
+    assert read("deals.xlsx").splitlines() == ["=== Sheet: Deals ===", "    Matter         Status", "1003-00001 Second request"]
+    assert "Closing timeline" in read("update.pptx")
+    assert read("note.eml") == "Subject: Second request\n\nPlease file the response."
+
+
+def test_harvey_tasks_drop_the_output_paragraph(tmp_path, monkeypatch):
+    task_dir = tmp_path / "tasks" / "001"
+    task_dir.mkdir(parents=True)
+    criterion = {"id": "C-001", "title": "Qualifying matter", "match_criteria": "Identifies 1003-00001.", "deliverables": ["response.md"]}
+    (task_dir / "task.json").write_text(json.dumps({
+        "id": "001", "title": "HSR second requests", "docs_dir": "../../dms", "criteria": [criterion],
+        "instructions": "Pull every matter with an HSR second request." + HarveyFirmKnowledge.OUTPUT_PARAGRAPH,
+        "deliverables": {"response.md": "response.md"},
+    }))
+    monkeypatch.setattr(HarveyFirmKnowledge, "download_folder", lambda self, folder: tmp_path)
+
+    [task] = HarveyFirmKnowledge().read_questions()
+
+    assert task.question == "Pull every matter with an HSR second request."
+    assert task.criteria == (HarveyCriterion("C-001", "Qualifying matter", "Identifies 1003-00001."),)
+
+
+def test_harvey_documents_are_stored_under_a_hash_of_their_path(monkeypatch):
+    monkeypatch.setattr(dataset_contracts, "split_text_into_chunks", lambda *args: ["First", "Second"])
+    # Cosmos DB item IDs can't hold "/", "#" or "?".
+    document = HarveyDocument.from_store_path("matters/1001-00001/Deal #2/memo?.docx", "First Second", "harvey-firm-knowledge")
+
+    passages = document.get_passages()
+
+    assert not set("/#?") & set(document.id)
+    assert (document.title, document.doc_id, document.matter_id) == (
+        "matters/1001-00001/Deal #2/memo?.docx", "matters/1001-00001/Deal #2/memo?.docx", "1001-00001",
+    )
+    assert all(HarveyDocument.read_doc_id(passage.id) == document.id for passage in passages)
+    assert all(passage.matter_id == "1001-00001" for passage in passages)
