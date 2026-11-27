@@ -54,11 +54,13 @@ from cosmos_agentic_retriever.server import create_app
 from dataset_browsecomp_plus import BrowseCompPlusCollection
 from dataset_contracts import Question
 from dataset_enterprise_rag_bench import EnterpriseRAGBenchCollection
+from dataset_harvey_firm_knowledge import HarveyFirmKnowledgeCollection
 from dataset_hipporag2 import HippoRAG2Collection
 
 COLLECTIONS = {
     "browsecomp-plus": BrowseCompPlusCollection,
     "enterprise-rag-bench": EnterpriseRAGBenchCollection,
+    "harvey-firm-knowledge": HarveyFirmKnowledgeCollection,
     "hipporag2": HippoRAG2Collection,
 }
 REPO_ROOT = Path(__file__).resolve().parents[2]
