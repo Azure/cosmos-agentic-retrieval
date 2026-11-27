@@ -157,7 +157,7 @@ def create_app(settings: AgenticSearchConfig | None = None) -> FastAPI:
             return JSONResponse(
                 status_code=400, content={"error": "A container requires a database."}
             )
-        max_documents = min(request.max_documents, resolved.agent_max_documents)
+        max_documents = min(request.max_documents, resolved.agent_documents_hard_limit)
         scope = SearchScope(
             database=request.database,
             containers=(frozenset({request.container}) if request.container is not None else None),
@@ -182,7 +182,7 @@ def create_app(settings: AgenticSearchConfig | None = None) -> FastAPI:
                 complete=client.complete,
                 tools=tools,
                 system_prompt=build_system_prompt(scope),
-                max_turns=resolved.agent_max_turns,
+                max_turns=resolved.agent_turns_soft_limit,
             )
         except Exception:
             logger.exception("agent_search_failed")

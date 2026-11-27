@@ -225,7 +225,7 @@ def test_out_of_scope_call_never_reaches_toolkit(http, arguments):
 def test_cited_and_ranked_puts_citations_first_within_the_limit(http, limit, service_cap):
     client, toolkit = http
     toolkit.results["hi"] = [{"id": f"d{index}", "text": str(index)} for index in range(10)]
-    settings = _settings(agent_max_documents=service_cap, returned_documents="cited_and_ranked")
+    settings = _settings(agent_documents_soft_limit=service_cap, returned_documents="cited_and_ranked")
     with TestClient(_app(settings)) as scoped:
         scoped.app.state.toolkit = client.app.state.toolkit
         scoped.app.state.chat_client = _FakeChat([_call(), _answer("It is [D10].")])
