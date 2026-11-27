@@ -43,7 +43,10 @@ short answer, an explanation of how the agent arrived at it, both citing
 documents by label, e.g. [D3], and references to the cited documents
 (cite_as label, database, container and id; no text). A citation to a label
 the agent was never given becomes [unverified source]. This example sets
-maxDocuments to 5; the service's agent_documents_hard_limit setting also caps that
-number (default 20). If a tool call fails, the response includes that error.
+maxDocuments to 5; requests can also set maxTurns, and returnedDocuments
+("cited" or "cited_and_ranked"). Settings left out use the service's soft
+limits, values above its hard limits are lowered to them, and the response
+reports the values used in settings_used. If a tool call fails, the response
+includes that error.
 See the README to run the service and connect the MCP toolkit.
 """
