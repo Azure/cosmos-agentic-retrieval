@@ -5,10 +5,13 @@ llm_model: YOUR-MODEL
 llm_params: {}
 # Retries after the initial model request; the SDK handles backoff and jitter.
 llm_max_retries: 6
-# Maximum model turns per question.
-agent_max_turns: 10
-# Most documents returned per question (up to 50); a request's maxDocuments can only lower it.
-agent_max_documents: 20
+# Agent turns per question. A request's maxTurns may go below the soft limit,
+# and above it only up to the hard limit (default: the soft limit).
+agent_turns_soft_limit: 10
+agent_turns_hard_limit: 10
+# Documents returned per question (up to 50), with the same rule for maxDocuments.
+agent_documents_soft_limit: 20
+agent_documents_hard_limit: 20
 # Documents returned: "cited" (only those the answer cites), or "cited_and_ranked"
 # (cited and then the best-ranked retrieved documents the answer didn't cite).
 returned_documents: cited

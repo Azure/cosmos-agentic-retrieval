@@ -43,6 +43,19 @@ def test_settings_from_environment(monkeypatch):
     assert settings.llm_model == "test-model"
 
 
+def test_hard_limits_default_to_soft_limits(monkeypatch):
+    _environment(monkeypatch)
+    settings = get_config()
+    assert (settings.agent_turns_soft_limit, settings.agent_turns_hard_limit) == (10, 10)
+    assert (settings.agent_documents_soft_limit, settings.agent_documents_hard_limit) == (20, 20)
+
+    monkeypatch.setenv("AGENT_TURNS_SOFT_LIMIT", "5")
+    monkeypatch.setenv("AGENT_DOCUMENTS_HARD_LIMIT", "40")
+    settings = get_config()
+    assert (settings.agent_turns_soft_limit, settings.agent_turns_hard_limit) == (5, 5)
+    assert (settings.agent_documents_soft_limit, settings.agent_documents_hard_limit) == (20, 40)
+
+
 @pytest.mark.parametrize("name", ["LLM_BASE_URL", "LLM_MODEL", "TOOLKIT_APP_ID"])
 def test_required_settings_fail_before_launch(monkeypatch, name):
     _environment(monkeypatch)
@@ -121,6 +134,11 @@ def test_environment_fills_field_absent_from_yaml(monkeypatch, tmp_path):
         {"toolkit_app_id": "   "},
         {"cosmos_database": "D"},
         {"typo": True},
+        {"agent_max_turns": 10},
+        {"agent_turns_soft_limit": 10, "agent_turns_hard_limit": 9},
+        {"agent_documents_soft_limit": 20, "agent_documents_hard_limit": 19},
+        {"agent_turns_hard_limit": 51},
+        {"agent_documents_hard_limit": 0},
     ],
 )
 def test_settings_reject_invalid_configuration(options):

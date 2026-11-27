@@ -21,10 +21,10 @@ the model unchanged.
 
 import os
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, Self
 
 import yaml
-from pydantic import AnyHttpUrl, Field, SecretStr, field_validator
+from pydantic import AnyHttpUrl, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from cosmos_agentic_retriever.agent.result_trimming import DEFAULT_DROPPED_FIELDS
@@ -44,8 +44,12 @@ class AgenticSearchConfig(BaseSettings):
     llm_api_key: SecretStr | None = None
     llm_params: dict[str, Any] = Field(default_factory=dict)
     llm_max_retries: int = Field(default=6, ge=0)
-    agent_max_turns: int = Field(default=10, ge=1, le=50)
-    agent_max_documents: int = Field(default=20, ge=1, le=50)
+    # Soft limit: used when a request doesn't set a value. Hard limit: the most a
+    # request may ask for; it defaults to the soft limit, so callers can only lower it.
+    agent_turns_soft_limit: int = Field(default=10, ge=1, le=50)
+    agent_turns_hard_limit: int = Field(ge=1, le=50)
+    agent_documents_soft_limit: int = Field(default=20, ge=1, le=50)
+    agent_documents_hard_limit: int = Field(ge=1, le=50)
     # "cited": only documents the answer cites; "cited_and_ranked" adds the
     # best-ranked retrieved documents it didn't cite, e.g. for benchmarks.
     returned_documents: Literal["cited", "cited_and_ranked"] = "cited"
@@ -66,6 +70,24 @@ class AgenticSearchConfig(BaseSettings):
         if not value.strip():
             raise ValueError("configure the toolkit's Entra app client ID")
         return value
+
+    @model_validator(mode="before")
+    @classmethod
+    def _hard_limits_default_to_soft_limits(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        data = dict(data)
+        for name in ("turns", "documents"):
+            soft = f"agent_{name}_soft_limit"
+            data.setdefault(f"agent_{name}_hard_limit", data.get(soft, cls.model_fields[soft].default))
+        return data
+
+    @model_validator(mode="after")
+    def _hard_limits_not_below_soft_limits(self) -> Self:
+        for name in ("turns", "documents"):
+            if getattr(self, f"agent_{name}_hard_limit") < getattr(self, f"agent_{name}_soft_limit"):
+                raise ValueError(f"agent_{name}_hard_limit must not be below agent_{name}_soft_limit")
+        return self
 
 
 def get_config() -> AgenticSearchConfig:
