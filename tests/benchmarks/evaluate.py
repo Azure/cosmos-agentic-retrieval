@@ -32,22 +32,26 @@ from cosmos_agentic_retriever.server import LLM_TOKEN_SCOPE
 from dataset_browsecomp_plus import BrowseCompPlusCollection
 from dataset_contracts import Question
 from dataset_enterprise_rag_bench import EnterpriseRAGBenchCollection
+from dataset_harvey_firm_knowledge import HarveyFirmKnowledgeCollection
 from dataset_hipporag2 import HippoRAG2Collection
 from evaluation_contracts import AgentResponse, Evaluator, Judge
 from evaluator_browsecomp_plus import BrowseCompPlusEvaluator
 from evaluator_enterprise_rag_bench import ERBEvaluator
+from evaluator_harvey_firm_knowledge import HarveyEvaluator
 from evaluator_hipporag2 import HippoRAGEvaluator
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 COLLECTIONS = {
     "browsecomp-plus": BrowseCompPlusCollection,
     "enterprise-rag-bench": EnterpriseRAGBenchCollection,
+    "harvey-firm-knowledge": HarveyFirmKnowledgeCollection,
     "hipporag2": HippoRAG2Collection,
 }
 # Each collection's default evaluator; --evaluator picks another.
 EVALUATORS = {
     "browsecomp-plus": BrowseCompPlusEvaluator,
     "enterprise-rag-bench": ERBEvaluator,
+    "harvey-firm-knowledge": HarveyEvaluator,
     "hipporag2": HippoRAGEvaluator,
 }
 

@@ -1,13 +1,15 @@
 """Contracts for question-answering benchmarks, and loading them into Document, Passage and Question objects.
 
 To add a dataset, subclass `BenchmarkDataset`, or `HFBenchmarkDataset` for one
-stored on Hugging Face. Documents too long to search whole subclass
-`ChunkedDocument`.
+stored on Hugging Face, or `GitHubBenchmarkDataset` for one stored in a GitHub
+repository. Documents too long to search whole subclass `ChunkedDocument`.
 """
 
 from __future__ import annotations
 
 import hashlib
+import shutil
+import subprocess
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -151,6 +153,37 @@ class HFBenchmarkDataset(BenchmarkDataset):
                 revision=revision or self.revision,
             )
         )
+
+
+class GitHubBenchmarkDataset(BenchmarkDataset):
+    """A dataset stored in a public GitHub repository at a pinned commit."""
+
+    # E.g. "harveyai/harvey-labs".
+    repo: ClassVar[str]
+    commit: ClassVar[str]
+    CACHE_DIR: ClassVar[Path] = Path.home() / ".cache" / "cosmos-agentic-retrieval" / "github"
+
+    def download_folder(self, folder: str) -> Path:
+        """Return a local copy of one repository folder at the pinned commit, downloading it once.
+
+        A sparse clone without blobs fetches only that folder's files, not the
+        whole repository.
+        """
+        checkout = self.CACHE_DIR / self.repo / f"{self.commit}-{folder.replace('/', '--')}"
+        if not checkout.is_dir():
+            # Cloned under another name and renamed when complete, so an interrupted download is redone.
+            partial = checkout.with_name(f"{checkout.name}.partial")
+            shutil.rmtree(partial, ignore_errors=True)
+            partial.parent.mkdir(parents=True, exist_ok=True)
+
+            def git(*args: str) -> None:
+                subprocess.run(["git", *args], check=True, capture_output=True)
+
+            git("clone", "--filter=blob:none", "--no-checkout", "--sparse", f"https://github.com/{self.repo}.git", str(partial))
+            git("-C", str(partial), "sparse-checkout", "set", folder)
+            git("-C", str(partial), "checkout", "--quiet", self.commit)
+            partial.rename(checkout)
+        return checkout / folder
 
 
 class BenchmarkCollection:

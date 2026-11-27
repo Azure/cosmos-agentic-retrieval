@@ -1,12 +1,15 @@
 # Benchmarks
 
-Measures agentic search on two collections:
+Measures agentic search on three collections:
 - [HippoRAG 2](https://huggingface.co/datasets/osunlp/HippoRAG_2): 1,000
   questions each from 2WikiMultihopQA, HotpotQA, MuSiQue, Natural Questions and
   PopQA, over one shared corpus of 45,881 passages.
 - [EnterpriseRAG-Bench](https://huggingface.co/datasets/onyx-dot-app/EnterpriseRAG-Bench)
   (ERB): 500 questions in 10 categories over 511,962 internal documents of a
   simulated company, from tools such as Slack, Gmail, Jira and Confluence.
+- [Harvey LAB Law Firm Knowledge](https://github.com/harveyai/harvey-labs/tree/7f9b1ee19f9224576a5a5143c4e6f75842ac7020/tasks/firm-knowledge)
+  (Harvey): 250 research requests over the document store of a fictional law
+  firm, 9,288 Word, Excel, email and PowerPoint files across 266 matters.
 
 ## Setup
 
@@ -37,6 +40,12 @@ so name the container after them, e.g. `--collection enterprise-rag-bench
 --container enterprise-rag-bench-c512-o128`. Loading it into a serverless
 account took about 18 hours with 4 to 8 workers, as Cosmos DB throttles the
 writes; a rerun loads only what is missing.
+
+Harvey files are converted to text the way Harvey LAB's agent reads them, and
+chunked the same way, e.g. `--collection harvey-firm-knowledge --container
+harvey-firm-knowledge-c512-o128`. The benchmark extras include the pandoc used
+for Word files. The whole corpus is about 318K chunks and took about 4 hours
+to load.
 
 ## Run
 
@@ -77,7 +86,10 @@ python tests/benchmarks/run.py --toolkit-url https://<toolkit-app>/mcp \
 Without `--questions-per-dataset`, all 5,000 questions run. For ERB, pass
 `--collection enterprise-rag-bench --container enterprise-rag-bench-c512-o128`;
 `--questions-per-dataset` then picks that many questions from each of its 10
-categories, and without it all 500 run.
+categories, and without it all 500 run. For Harvey, pass `--collection
+harvey-firm-knowledge --container harvey-firm-knowledge-c512-o128`; without
+`--questions-per-dataset` all 250 run. Its tasks are long, so use about 4
+workers to stay within the model's rate limit.
 
 Each run writes one JSON file under `.live-data/benchmark-runs/` with its
 settings, a per-dataset summary (latency, turns, tool calls and agent token
@@ -121,3 +133,15 @@ and reports each score per category too:
 The scores come from our own evaluator and judge model, without ERB's step
 that corrects gold documents and answers. They are not comparable with the ERB
 leaderboard.
+
+The Harvey evaluator grades each of a task's rubric criteria with Harvey LAB's
+judge prompt, and reports:
+- **correct**: every criterion passes; Harvey LAB's headline score.
+- **criteria_passed**: share of the task's criteria that pass.
+- **returned_matter_recall** and **cited_matter_recall**: share of the matters
+  the criteria name among the matters of the returned or cited documents. Not
+  scored for the 7 tasks whose criteria name no matter.
+
+These scores are not comparable with Harvey LAB's: our judge model grades the
+agent's text answer, where Harvey LAB grades a `response.md` file the agent
+writes. Matter recall is our own addition.

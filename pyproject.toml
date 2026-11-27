@@ -21,7 +21,12 @@ dependencies = [
 benchmark = [
   "azure-cosmos>=4.7,<5",
   "huggingface_hub>=0.24,<2",
+  "markitdown[pptx]>=0.1.2,<0.2",
+  "openpyxl>=3.1,<4",
+  "pandas>=2.2,<4",
   "pyarrow>=18,<27",
+  # Bundles the pandoc binary that Harvey LAB uses to read .docx files.
+  "pypandoc_binary>=1.15,<2",
   "tiktoken>=0.7,<1",
 ]
 dev = [

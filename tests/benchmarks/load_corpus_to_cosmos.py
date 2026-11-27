@@ -33,11 +33,13 @@ from tqdm import tqdm
 from dataset_browsecomp_plus import BrowseCompPlusCollection
 from dataset_contracts import Passage
 from dataset_enterprise_rag_bench import EnterpriseRAGBenchCollection
+from dataset_harvey_firm_knowledge import HarveyFirmKnowledgeCollection
 from dataset_hipporag2 import HippoRAG2Collection
 
 COLLECTIONS = {
     "browsecomp-plus": BrowseCompPlusCollection,
     "enterprise-rag-bench": EnterpriseRAGBenchCollection,
+    "harvey-firm-knowledge": HarveyFirmKnowledgeCollection,
     "hipporag2": HippoRAG2Collection,
 }
 TEXT_PATHS = ("/title", "/text")
